@@ -507,24 +507,50 @@ if not df_curr.empty and len(full_timestamps) > 0:
 # --- TAB 3: SURFACE 3D ---
 with tab3:
     if Z_matrix_real.shape[1] > 1:
+        # Calcular el máximo absoluto para centrar el cero en el medio exacto
+        max_abs_gex = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
+
         fig3 = go.Figure(data=[go.Surface(
             x=full_timestamps,
             y=fine_strikes,
             z=Z_matrix_real,
+            cmin=-max_abs_gex,
+            cmax=max_abs_gex,
             colorscale=[
-                [0.0, 'rgb(255, 23, 68)'], [0.5, 'rgb(14, 18, 23)'], [1.0, 'rgb(0, 230, 118)']
-            ]
+                [0.0, '#FF1744'],   # Put GEX Negativo (Rojo)
+                [0.45, '#2A1215'],  # Transición suave
+                [0.5, '#0E1117'],   # Z = 0 (Oscuro / Fondo neutro)
+                [0.55, '#122A1E'],  # Transición suave
+                [1.0, '#00E676']    # Call GEX Positivo (Verde)
+            ],
+            # Malla topográfica y contornos estilo científico
+            contours_z=dict(
+                show=True,
+                usecolormap=True,
+                highlightcolor="#00E5FF",
+                project_z=True
+            ),
+            lighting=dict(ambient=0.6, diffuse=0.8, roughness=0.3, specular=0.2)
         )])
+
         fig3.update_layout(
-            template="plotly_dark", paper_bgcolor='#0E1117',
-            title="Superficie Intradía de Gamma Exposición (3D)",
+            template="plotly_dark",
+            paper_bgcolor='#0E1117',
+            title="Superficie Intradía de Gamma Exposición (3D Topographic)",
             scene=dict(
                 xaxis_title='Hora',
                 yaxis_title='Strike ($)',
                 zaxis_title='Net GEX ($)',
-                aspectratio=dict(x=1.5, y=1, z=0.5)
+                aspectratio=dict(x=1.6, y=1.2, z=0.6),
+                camera=dict(
+                    eye=dict(x=1.5, y=-1.5, z=1.1)  # Ángulo de visión panorámico
+                ),
+                xaxis=dict(gridcolor="#1E2433", backgroundcolor="#0B0E14"),
+                yaxis=dict(gridcolor="#1E2433", backgroundcolor="#0B0E14"),
+                zaxis=dict(gridcolor="#1E2433", backgroundcolor="#0B0E14")
             ),
-            height=650, margin=dict(l=20, r=20, t=50, b=20)
+            height=680,
+            margin=dict(l=20, r=20, t=50, b=20)
         )
         st.plotly_chart(fig3, use_container_width=True)
 
