@@ -1,10 +1,12 @@
 import os
 import json
+import time
 import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import schwab
 
@@ -12,12 +14,10 @@ import schwab
 st.set_page_config(page_title="GEX Terminal Pro - Schwab", layout="wide", initial_sidebar_state="expanded")
 
 # --- MANEJO SEGURO DE SECRETOS Y TOKEN ---
-# Lee las credenciales desde st.secrets si existen (Streamlit Cloud) o usa valores por defecto
 CLIENT_ID = st.secrets.get("CLIENT_ID", "QJJS3fGYgzh425rtmmGHbPNL5r3ShCHr0FYxerrPzDbAnGxw")
 CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "GQwRhMGJpbHOMB3ANarKzGIgWfxwYUpwN8mvUpyQGpRwd6Jds7gFMnlwiu9THPkj")
 TOKEN_PATH = "schwab_token.json"
 
-# Crear el archivo de token dinámicamente si se despliega en Streamlit Cloud
 if "SCHWAB_TOKEN" in st.secrets and not os.path.exists(TOKEN_PATH):
     raw_token = st.secrets["SCHWAB_TOKEN"]
     with open(TOKEN_PATH, "w") as f:
@@ -122,6 +122,15 @@ tz_choice = st.sidebar.selectbox("TIMEZONE", ["UTC-5 (Lima)", "UTC-4 (New York)"
 tz_target = "America/Lima" if "UTC-5" in tz_choice else "America/New_York"
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("🔄 AUTO-REFRESCO")
+auto_refresh = st.sidebar.toggle("Activar en vivo", value=True)
+refresh_interval = st.sidebar.select_slider(
+    "Intervalo (segundos)",
+    options=[10, 15, 30, 60],
+    value=15,
+    disabled=not auto_refresh
+)
+
 if st.sidebar.button("🔄 ACTUALIZAR DATOS AHORA", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
@@ -205,9 +214,20 @@ def parse_schwab_chain(chain_data):
         opt = opt_list[0]
         strike = float(strike_str)
         if strike not in records:
-            records[strike] = {'strike': strike, 'openInterest_c': 0, 'openInterest_p': 0, 'gamma_c': 0.0, 'gamma_p': 0.0, 'iv_c': 0.0, 'iv_p': 0.0}
+            records[strike] = {
+                'strike': strike,
+                'openInterest_c': 0, 'openInterest_p': 0,
+                'gamma_c': 0.0, 'gamma_p': 0.0,
+                'delta_c': 0.0, 'delta_p': 0.0,
+                'theta_c': 0.0, 'theta_p': 0.0,
+                'vega_c': 0.0, 'vega_p': 0.0,
+                'iv_c': 0.0, 'iv_p': 0.0
+            }
         records[strike]['openInterest_c'] = opt.get('openInterest', 0)
         records[strike]['gamma_c'] = opt.get('gamma', 0.0)
+        records[strike]['delta_c'] = opt.get('delta', 0.0)
+        records[strike]['theta_c'] = opt.get('theta', 0.0)
+        records[strike]['vega_c'] = opt.get('vega', 0.0)
         vol = opt.get('volatility', opt.get('impliedVolatility', 0.0))
         records[strike]['iv_c'] = vol / 100.0 if vol > 2 else vol
 
@@ -216,9 +236,20 @@ def parse_schwab_chain(chain_data):
         opt = opt_list[0]
         strike = float(strike_str)
         if strike not in records:
-            records[strike] = {'strike': strike, 'openInterest_c': 0, 'openInterest_p': 0, 'gamma_c': 0.0, 'gamma_p': 0.0, 'iv_c': 0.0, 'iv_p': 0.0}
+            records[strike] = {
+                'strike': strike,
+                'openInterest_c': 0, 'openInterest_p': 0,
+                'gamma_c': 0.0, 'gamma_p': 0.0,
+                'delta_c': 0.0, 'delta_p': 0.0,
+                'theta_c': 0.0, 'theta_p': 0.0,
+                'vega_c': 0.0, 'vega_p': 0.0,
+                'iv_c': 0.0, 'iv_p': 0.0
+            }
         records[strike]['openInterest_p'] = opt.get('openInterest', 0)
         records[strike]['gamma_p'] = opt.get('gamma', 0.0)
+        records[strike]['delta_p'] = opt.get('delta', 0.0)
+        records[strike]['theta_p'] = opt.get('theta', 0.0)
+        records[strike]['vega_p'] = opt.get('vega', 0.0)
         vol = opt.get('volatility', opt.get('impliedVolatility', 0.0))
         records[strike]['iv_p'] = vol / 100.0 if vol > 2 else vol
 
@@ -238,7 +269,7 @@ def fmt_val(val):
     else:
         return f"{sign}${val:.1f}"
 
-# --- CÁLCULOS CUÁNTICOS DE OPCIONES ---
+# --- CÁLCULOS CUÁNTICOS DE OPCIONES & GRIEGAS ---
 if not df_curr.empty:
     exp_date_part = exp_0dte.split(':')[0] if ':' in exp_0dte else exp_0dte
     exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
@@ -260,9 +291,25 @@ if not df_curr.empty:
         ) / (spot_price * atm_iv * np.sqrt(T_exp)), axis=1
     )
     
+    # Exposición Gamma (GEX)
     df_curr['call_gex'] = df_curr['gamma'] * df_curr['openInterest_c'] * (spot_price ** 2) * 0.01
     df_curr['put_gex'] = df_curr['gamma'] * df_curr['openInterest_p'] * (spot_price ** 2) * (-0.01)
     df_curr['net_gex'] = df_curr['call_gex'] + df_curr['put_gex']
+
+    # Exposición Delta (DEX en $M)
+    df_curr['call_dex'] = df_curr['delta_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
+    df_curr['put_dex'] = df_curr['delta_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
+    df_curr['net_dex'] = df_curr['call_dex'] + df_curr['put_dex']
+
+    # Exposición Theta (TEX $ Decay / día)
+    df_curr['call_tex'] = df_curr['theta_c'] * df_curr['openInterest_c'] * 100
+    df_curr['put_tex'] = df_curr['theta_p'] * df_curr['openInterest_p'] * 100
+    df_curr['net_tex'] = df_curr['call_tex'] + df_curr['put_tex']
+
+    # Exposición Vega (VEX $ / 1% IV)
+    df_curr['call_vex'] = df_curr['vega_c'] * df_curr['openInterest_c'] * 100
+    df_curr['put_vex'] = df_curr['vega_p'] * df_curr['openInterest_p'] * 100
+    df_curr['net_vex'] = df_curr['call_vex'] + df_curr['put_vex']
 
     calls_dominant = df_curr[df_curr['net_gex'] > 0].sort_values('net_gex', ascending=False)
     top_calls = calls_dominant['strike'].tolist()
@@ -290,7 +337,15 @@ min_strike = int(np.floor(spot_price - (strike_range * 0.8)))
 max_strike = int(np.ceil(spot_price + (strike_range * 0.8)))
 
 # --- PESTAÑAS PRINCIPALES ---
-tab1, tab2, tab3, tab4 = st.tabs(["NET GEX PROFILE", "CALLS vs PUTS", "SURFACE 3D", "GAMMA DEPTH HEATMAP"])
+tab1, tab2, tab_dex, tab_tex_vex, tab3, tab4, tab_data = st.tabs([
+    "NET GEX PROFILE",
+    "CALLS vs PUTS",
+    "DELTA EXPOSURE (DEX)",
+    "THETA & VEGA (TEX/VEX)",
+    "SURFACE 3D",
+    "GAMMA DEPTH HEATMAP",
+    "MATRIZ DE DATOS"
+])
 
 # --- TAB 1: NET GEX PROFILE ---
 with tab1:
@@ -342,6 +397,52 @@ with tab2:
             height=600, margin=dict(l=60, r=40, t=50, b=40)
         )
         st.plotly_chart(fig2, use_container_width=True)
+
+# --- TAB DEX: DELTA EXPOSURE ---
+with tab_dex:
+    if not df_curr.empty:
+        df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+        
+        fig_dex = go.Figure()
+        fig_dex.add_trace(go.Bar(
+            x=df_sub['strike'], y=df_sub['net_dex'],
+            name="Net DEX ($M)", marker_color='#3B82F6',
+            hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net DEX:</b> $%{y:.2f}M<extra></extra>"
+        ))
+        fig_dex.add_vline(x=spot_price, line_color="#FFD700", line_width=1.5, line_dash="dash",
+                          annotation_text=f"Spot: ${spot_price:.2f}")
+
+        fig_dex.update_layout(
+            template="plotly_dark", plot_bgcolor='#0E1117', paper_bgcolor='#0E1117',
+            title="Delta Exposure Total (DEX) por Strike ($ Millones)",
+            xaxis_title="Strike ($)", yaxis_title="DEX ($ Millones)",
+            height=600, margin=dict(l=60, r=40, t=50, b=40)
+        )
+        st.plotly_chart(fig_dex, use_container_width=True)
+
+# --- TAB TEX/VEX: THETA & VEGA ---
+with tab_tex_vex:
+    if not df_curr.empty:
+        df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+        
+        fig_tv = make_subplots(
+            rows=2, cols=1,
+            subplot_titles=("Theta Exposure (Pérdida por Decaimiento Temporal $/día)", "Vega Exposure (Sensibilidad $/1% Cambio en IV)")
+        )
+        
+        fig_tv.add_trace(go.Bar(
+            x=df_sub['strike'], y=df_sub['net_tex'], name="Theta ($)", marker_color='#F59E0B'
+        ), row=1, col=1)
+        
+        fig_tv.add_trace(go.Bar(
+            x=df_sub['strike'], y=df_sub['net_vex'], name="Vega ($)", marker_color='#8B5CF6'
+        ), row=2, col=1)
+        
+        fig_tv.update_layout(
+            template="plotly_dark", plot_bgcolor='#0E1117', paper_bgcolor='#0E1117',
+            height=650, showlegend=False, margin=dict(l=60, r=40, t=50, b=40)
+        )
+        st.plotly_chart(fig_tv, use_container_width=True)
 
 # --- PREPARACIÓN Y ALINEACIÓN DE DATOS TEMPORALES DEL DÍA DE HOY ---
 h_1m = fetch_history_schwab(ticker_symbol)
@@ -521,3 +622,17 @@ with tab4:
         st.warning("Sin datos intradía disponibles en Schwab para generar el mapa de profundidad.")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
+# --- TAB MATRIZ DE DATOS ---
+with tab_data:
+    if not df_curr.empty:
+        st.dataframe(
+            df_curr[['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex']],
+            use_container_width=True,
+            height=600
+        )
+
+# --- BUCLE DE AUTO-REFRESCO AL FINAL ---
+if auto_refresh:
+    time.sleep(refresh_interval)
+    st.rerun()
