@@ -5,6 +5,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
+from scipy.ndimage import gaussian_filter
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
@@ -489,6 +490,9 @@ if not df_curr.empty and len(full_timestamps) > 0:
     days_to_exp = max((exp_dt - ref_today).days, 0)
     T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
 
+    # Ancho de banda dinámico según separación de strikes
+    sigma_k = max(0.8, (max_strike - min_strike) / 35.0)
+
     for t_idx, S_t in enumerate(full_spots):
         if S_t <= 0 or np.isnan(S_t): continue
         for _, r in df_curr.iterrows():
@@ -501,13 +505,17 @@ if not df_curr.empty and len(full_timestamps) > 0:
             gamma_t = norm.pdf(d1_t) / (S_t * atm_iv * np.sqrt(T_exp))
             net_gex_t = net_oi * gamma_t * (S_t ** 2) * 0.01
 
-            gauss_weight = np.exp(-0.5 * ((fine_strikes - K) / 0.05) ** 2)
+            # Suavizado gaussiano expandido para unir puntos entre strikes
+            gauss_weight = np.exp(-0.5 * ((fine_strikes - K) / sigma_k) ** 2)
             Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
+
+    # Filtrado 2D continuo con SciPy para generar una superficie fluida (estilo Foto 2)
+    if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
+        Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(1.8, 2.5))
 
 # --- TAB 3: SURFACE 3D ---
 with tab3:
     if Z_matrix_real.shape[1] > 1:
-        # Calcular el máximo absoluto para centrar el cero en el medio exacto
         max_abs_gex = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
 
         fig3 = go.Figure(data=[go.Surface(
@@ -518,32 +526,39 @@ with tab3:
             cmax=max_abs_gex,
             colorscale=[
                 [0.0, '#FF1744'],   # Put GEX Negativo (Rojo)
-                [0.45, '#2A1215'],  # Transición suave
-                [0.5, '#0E1117'],   # Z = 0 (Oscuro / Fondo neutro)
-                [0.55, '#122A1E'],  # Transición suave
+                [0.35, '#2A1215'],  # Transición suave
+                [0.5, '#0E1117'],   # Z = 0 (Neutro)
+                [0.65, '#122A1E'],  # Transición suave
                 [1.0, '#00E676']    # Call GEX Positivo (Verde)
             ],
-            # Malla topográfica y contornos estilo científico
-            contours_z=dict(
-                show=True,
-                usecolormap=True,
-                highlightcolor="#00E5FF",
-                project_z=True
+            lighting=dict(
+                ambient=0.6,
+                diffuse=0.8,
+                fresnel=0.2,
+                specular=0.4,
+                roughness=0.3
             ),
-            lighting=dict(ambient=0.6, diffuse=0.8, roughness=0.3, specular=0.2)
+            contours=dict(
+                z=dict(
+                    show=True,
+                    usecolormap=True,
+                    highlightcolor="#FFFFFF",
+                    project_z=True
+                )
+            )
         )])
 
         fig3.update_layout(
             template="plotly_dark",
             paper_bgcolor='#0E1117',
-            title="Superficie Intradía de Gamma Exposición (3D Topographic)",
+            title="Superficie Intradía Continuada de Gamma Exposición (3D Continuous Surface)",
             scene=dict(
                 xaxis_title='Hora',
                 yaxis_title='Strike ($)',
                 zaxis_title='Net GEX ($)',
                 aspectratio=dict(x=1.6, y=1.2, z=0.6),
                 camera=dict(
-                    eye=dict(x=1.5, y=-1.5, z=1.1)  # Ángulo de visión panorámico
+                    eye=dict(x=1.6, y=-1.6, z=1.0)
                 ),
                 xaxis=dict(gridcolor="#1E2433", backgroundcolor="#0B0E14"),
                 yaxis=dict(gridcolor="#1E2433", backgroundcolor="#0B0E14"),
