@@ -234,29 +234,47 @@ if not st.session_state.authenticated:
             height=0,
         )
 
-def login_user(email, password):
+import hashlib
+
+def login_user(username_in, password_in):
+    # 1. Intento de validación contra Supabase (Tabla app_users)
     if supabase:
         try:
-            res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-            if res.user:
+            # Hash SHA-256 de la contraseña ingresada en el formulario
+            pass_hash = hashlib.sha256(password_in.encode('utf-8')).hexdigest()
+            
+            # Consulta a la tabla app_users haciendo match con username y password_hash
+            res = supabase.table("app_users") \
+                .select("*") \
+                .eq("username", username_in) \
+                .eq("password_hash", pass_hash) \
+                .execute()
+                
+            if res.data and len(res.data) > 0:
                 st.session_state.authenticated = True
-                st.session_state.user_email = email
-                return True, "Inicio de sesión exitoso."
-        except Exception:
-            try:
-                res = supabase.table("users").select("*").eq("email", email).eq("password", password).execute()
-                if res.data:
-                    st.session_state.authenticated = True
-                    st.session_state.user_email = email
-                    return True, "Inicio de sesión exitoso."
-            except Exception:
-                pass
+                st.session_state.user_email = username_in
+                
+                # Registro opcional de sesión activa en Supabase
+                try:
+                    supabase.table("active_sessions").upsert({
+                        "username": username_in,
+                        "ip_address": "streamlit_cloud",
+                        "session_token": st.session_state.get("session_id", "active"),
+                        "last_seen": datetime.now().isoformat()
+                    }).execute()
+                except Exception as e_sess:
+                    log_to_console("Active Sessions Upsert Error", e_sess)
+                    
+                return True, f"Bienvenido {res.data[0].get('name', username_in)}"
+        except Exception as e:
+            log_to_console("Supabase Login Error", e)
 
-    valid_users = st.secrets.get("USERS", {"admin@gex.com": "admin123", "trader@gex.com": "gex2026"})
-    if isinstance(valid_users, dict) and email in valid_users and valid_users[email] == password:
+    # 2. Respaldo contra secrets.toml (Streamlit Secrets)
+    valid_users = st.secrets.get("USERS", {})
+    if isinstance(valid_users, dict) and username_in in valid_users and valid_users[username_in] == password_in:
         st.session_state.authenticated = True
-        st.session_state.user_email = email
-        return True, "Inicio de sesión exitoso."
+        st.session_state.user_email = username_in
+        return True, "Inicio de sesión exitoso (Modo Respaldo)."
 
     return False, "Usuario o contraseña incorrectos."
 
