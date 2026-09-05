@@ -21,6 +21,7 @@ CLIENT_ID = st.secrets.get("CLIENT_ID", "QJJS3fGYgzh425rtmmGHbPNL5r3ShCHr0FYxerr
 CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "GQwRhMGJpbHOMB3ANarKzGIgWfxwYUpwN8mvUpyQGpRwd6Jds7gFMnlwiu9THPkj")
 JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "6a9b6fb2da38895dfe3ab4fc")
 JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "$2a$10$SJzpaPLR88mtOlFsqg3g5OHxzYrwkkS9QJRYTUIGXnhxyW6bi0nyO")
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", st.secrets.get("GROQ_KEY", st.secrets.get("groq_api_key", os.environ.get("GROQ_API_KEY", None))))
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", None)
 
 TOKEN_PATH = "schwab_token.json"
@@ -48,7 +49,7 @@ except Exception as e:
     st.error(f"Error al conectar con la API de Schwab: {e}")
     st.stop()
 
-# --- CLIENTE DE GEMINI 3.6 FLASH ---
+# --- CLIENTES DE IA (GROQ Y GEMINI) ---
 @st.cache_resource
 def get_gemini_client():
     if GEMINI_API_KEY:
@@ -59,6 +60,39 @@ def get_gemini_client():
     return None
 
 ai_client = get_gemini_client()
+
+def query_groq(system_prompt, user_prompt, api_key):
+    """Ejecuta consulta a Groq vía SDK si está disponible o mediante API REST directa."""
+    try:
+        from groq import Groq
+        groq_client = Groq(api_key=api_key)
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3
+        )
+        return completion.choices[0].message.content
+    except ImportError:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.3
+        }
+        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"]
+        else:
+            raise Exception(f"Groq API Error {resp.status_code}: {resp.text}")
 
 # --- ESTILOS CSS FINTECH INSTITUCIONAL ---
 st.markdown("""
@@ -512,12 +546,9 @@ else:
     iv_str = "20.00%"
     iv_rank_str = "N/A"
 
-# --- ASISTENTE IA GEMINI 3.6 FLASH CACHEADO ---
+# --- ASISTENTE IA GROQ / GEMINI CACHEADO ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def consultar_ia_cache(tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, net_gex_total, regime_str, call_gex_sum, put_gex_sum, total_gex, cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma, iv_str, condition_str):
-    if not ai_client:
-        return "⚠️ Configura 'GEMINI_API_KEY' en los Secrets de Streamlit para activar la IA."
-
     system_prompt = f"""
     Eres un analista cuantitativo experto en estructura de opciones, Gamma Exposure (GEX) y microestructura de mercado.
     Responde en español de forma analítica, directa y profesional usando viñetas.
@@ -535,14 +566,26 @@ def consultar_ia_cache(tipo_analisis, mensaje_usuario, ticker_symbol, spot_price
 
     prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado enfocándote en {tipo_analisis}."
 
-    try:
-        response = ai_client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=f"{system_prompt}\n\nPregunta del usuario: {prompt_final}"
-        )
-        return response.text
-    except Exception as e:
-        return f"Error al comunicarse con Gemini: {str(e)}"
+    # Intentar primero con Groq
+    if GROQ_API_KEY:
+        try:
+            return query_groq(system_prompt, prompt_final, GROQ_API_KEY)
+        except Exception as e_groq:
+            if not ai_client:
+                return f"Error al comunicarse con Groq: {str(e_groq)}"
+
+    # Respaldo opcional con Gemini
+    if ai_client:
+        try:
+            response = ai_client.models.generate_content(
+                model='gemini-3.6-flash',
+                contents=f"{system_prompt}\n\nPregunta del usuario: {prompt_final}"
+            )
+            return response.text
+        except Exception as e_gemini:
+            return f"Error al comunicarse con Gemini: {str(e_gemini)}"
+
+    return "⚠️ Configura 'GROQ_API_KEY' o 'GEMINI_API_KEY' en los Secrets de Streamlit para activar el asistente de IA."
 
 def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
     return consultar_ia_cache(
@@ -557,17 +600,17 @@ if "chat_messages" not in st.session_state:
 
 st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
 with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
-    st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:800; font-size:0.9rem; color:#60A5FA; margin-bottom:4px;'>🤖 ASISTENTE CUANTITATIVO GEMINI</p>", unsafe_allow_html=True)
+    st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:800; font-size:0.9rem; color:#60A5FA; margin-bottom:4px;'>🤖 ASISTENTE CUANTITATIVO GROQ</p>", unsafe_allow_html=True)
     st.caption("Diagnóstico en vivo del mercado según perfiles GEX")
 
     col_btn1, col_btn2 = st.columns(2)
     if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
-        with st.spinner("Analizando pre-market..."):
+        with st.spinner("Analizando pre-market con Groq..."):
             res = consultar_ia(tipo_analisis="Pre-Market")
             st.session_state.chat_messages.append({"role": "assistant", "content": res})
 
     if col_btn2.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
-        with st.spinner("Analizando flujo intradía..."):
+        with st.spinner("Analizando flujo intradía con Groq..."):
             res = consultar_ia(tipo_analisis="Mercado Intradía")
             st.session_state.chat_messages.append({"role": "assistant", "content": res})
 
