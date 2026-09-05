@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import schwab
+from google import genai
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="GEX Terminal Pro - Schwab", layout="wide", initial_sidebar_state="expanded")
@@ -20,6 +21,8 @@ CLIENT_ID = st.secrets.get("CLIENT_ID", "QJJS3fGYgzh425rtmmGHbPNL5r3ShCHr0FYxerr
 CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "GQwRhMGJpbHOMB3ANarKzGIgWfxwYUpwN8mvUpyQGpRwd6Jds7gFMnlwiu9THPkj")
 JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "6a9b6fb2da38895dfe3ab4fc")
 JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "$2a$10$SJzpaPLR88mtOlFsqg3g5OHxzYrwkkS9QJRYTUIGXnhxyW6bi0nyO")
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", None)
+
 TOKEN_PATH = "schwab_token.json"
 
 if "SCHWAB_TOKEN" in st.secrets and not os.path.exists(TOKEN_PATH):
@@ -44,6 +47,18 @@ try:
 except Exception as e:
     st.error(f"Error al conectar con la API de Schwab: {e}")
     st.stop()
+
+# --- CLIENTE DE GEMINI 2.0 FLASH ---
+@st.cache_resource
+def get_gemini_client():
+    if GEMINI_API_KEY:
+        try:
+            return genai.Client(api_key=GEMINI_API_KEY)
+        except Exception:
+            return None
+    return None
+
+ai_client = get_gemini_client()
 
 # --- ESTILOS CSS FINTECH INSTITUCIONAL ---
 st.markdown("""
@@ -496,6 +511,74 @@ else:
     condition_str = "Neutral"
     iv_str = "20.00%"
     iv_rank_str = "N/A"
+
+# --- ASISTENTE IA GEMINI 2.0 FLASH ---
+def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
+    if not ai_client:
+        return "⚠️ Configura 'GEMINI_API_KEY' en los Secrets de Streamlit para activar la IA."
+
+    system_prompt = f"""
+    Eres un analista cuantitativo experto en estructura de opciones, Gamma Exposure (GEX) y microestructura de mercado.
+    Responde en español de forma analítica, directa y profesional usando viñetas.
+
+    Métricas actuales del mercado ({ticker_symbol}):
+    - Spot Price: ${spot_price:.2f}
+    - Net GEX Total: {fmt_val(net_gex_total)} ({regime_str})
+    - Call GEX: {fmt_val(call_gex_sum)} | Put GEX: {fmt_val(put_gex_sum)} | Total GEX: {fmt_val(total_gex, show_sign=False)}
+    - Call Walls: CW1=${cw1:.0f}, CW2=${cw2:.0f}, CW3=${cw3:.0f}
+    - Put Walls: PW1=${pw1:.0f}, PW2=${pw2:.0f}, PW3=${pw3:.0f}
+    - Zero Gamma (Flip Level): ${zero_gamma:.2f}
+    - Volatilidad Implícita (ATM): {iv_str}
+    - Condición de Mercado: {condition_str}
+    """
+
+    prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado enfocándote en {tipo_analisis}."
+
+    try:
+        response = ai_client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=f"{system_prompt}\n\nPregunta del usuario: {prompt_final}"
+        )
+        return response.text
+    except Exception as e:
+        return f"Error al comunicarse con Gemini: {str(e)}"
+
+# --- WIDGET CHATBOT EN SIDEBAR ---
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
+
+st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
+with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
+    st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:800; font-size:0.9rem; color:#60A5FA; margin-bottom:4px;'>🤖 ASISTENTE CUANTITATIVO GEMINI</p>", unsafe_allow_html=True)
+    st.caption("Diagnóstico en vivo del mercado según perfiles GEX")
+
+    col_btn1, col_btn2 = st.columns(2)
+    if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
+        with st.spinner("Analizando pre-market..."):
+            res = consultar_ia(tipo_analisis="Pre-Market")
+            st.session_state.chat_messages.append({"role": "assistant", "content": res})
+
+    if col_btn2.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
+        with st.spinner("Analizando flujo intradía..."):
+            res = consultar_ia(tipo_analisis="Mercado Intradía")
+            st.session_state.chat_messages.append({"role": "assistant", "content": res})
+
+    st.markdown("---")
+
+    for msg in st.session_state.chat_messages:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+
+    if chat_input := st.chat_input("Escribe tu pregunta sobre GEX..."):
+        st.session_state.chat_messages.append({"role": "user", "content": chat_input})
+        with st.chat_message("user"):
+            st.write(chat_input)
+
+        with st.spinner("Pensando..."):
+            respuesta_bot = consultar_ia(mensaje_usuario=chat_input)
+            st.session_state.chat_messages.append({"role": "assistant", "content": respuesta_bot})
+            with st.chat_message("assistant"):
+                st.write(respuesta_bot)
 
 # --- PANEL DE MÉTRICAS TOP ---
 cw_diff = ((cw1 - spot_price) / spot_price * 100) if spot_price > 0 else 0
@@ -957,14 +1040,11 @@ with tab_back:
 
         st.plotly_chart(fig_back, use_container_width=True, config={'scrollZoom': True}, key="heatmap_backtest")
 
-        # --- PERFIL DINÁMICO DE NET GEX EN TIEMPO DE BACKTEST ---
         if not df_curr.empty:
             st.markdown("<hr style='border-color:rgba(255,255,255,0.08); margin: 25px 0;'>", unsafe_allow_html=True)
             
-            # Obtener el spot simulado en el minuto del backtest
             bt_spot_val = bt_h_1m['Close'].dropna().iloc[-1] if (not bt_h_1m.empty and 'Close' in bt_h_1m and len(bt_h_1m['Close'].dropna()) > 0) else spot_price
 
-            # Recalcular Gamma y Net GEX dinámicamente para el spot del instante simulado
             df_curr_bt = recalculate_gex_for_spot(df_curr, bt_spot_val, T_exp, atm_iv)
 
             df_sub_bt = df_curr_bt[(df_curr_bt['strike'] >= min_strike) & (df_curr_bt['strike'] <= max_strike)].copy()
