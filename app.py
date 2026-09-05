@@ -270,6 +270,7 @@ def parse_schwab_chain(chain_data):
                 'delta_c': 0.0, 'delta_p': 0.0,
                 'theta_c': 0.0, 'theta_p': 0.0,
                 'vega_c': 0.0, 'vega_p': 0.0,
+                'rho_c': 0.0, 'rho_p': 0.0,
                 'iv_c': 0.0, 'iv_p': 0.0
             }
         records[strike]['openInterest_c'] = opt.get('openInterest', 0)
@@ -277,6 +278,7 @@ def parse_schwab_chain(chain_data):
         records[strike]['delta_c'] = opt.get('delta', 0.0)
         records[strike]['theta_c'] = opt.get('theta', 0.0)
         records[strike]['vega_c'] = opt.get('vega', 0.0)
+        records[strike]['rho_c'] = opt.get('rho', 0.0)
         vol = opt.get('volatility', opt.get('impliedVolatility', 0.0))
         records[strike]['iv_c'] = vol / 100.0 if vol > 2 else vol
 
@@ -292,6 +294,7 @@ def parse_schwab_chain(chain_data):
                 'delta_c': 0.0, 'delta_p': 0.0,
                 'theta_c': 0.0, 'theta_p': 0.0,
                 'vega_c': 0.0, 'vega_p': 0.0,
+                'rho_c': 0.0, 'rho_p': 0.0,
                 'iv_c': 0.0, 'iv_p': 0.0
             }
         records[strike]['openInterest_p'] = opt.get('openInterest', 0)
@@ -299,6 +302,7 @@ def parse_schwab_chain(chain_data):
         records[strike]['delta_p'] = opt.get('delta', 0.0)
         records[strike]['theta_p'] = opt.get('theta', 0.0)
         records[strike]['vega_p'] = opt.get('vega', 0.0)
+        records[strike]['rho_p'] = opt.get('rho', 0.0)
         vol = opt.get('volatility', opt.get('impliedVolatility', 0.0))
         records[strike]['iv_p'] = vol / 100.0 if vol > 2 else vol
 
@@ -307,7 +311,6 @@ def parse_schwab_chain(chain_data):
 
 df_curr, exp_0dte = parse_schwab_chain(chain_raw)
 
-# FORMATO CON OPCIÓN DE OCULTAR EL SIGNO "+" (Utilizado para Total GEX)
 def fmt_val(val, show_sign=True):
     sign = ("+" if val > 0 else "") if show_sign else ""
     if abs(val) >= 1e9:
@@ -319,7 +322,7 @@ def fmt_val(val, show_sign=True):
     else:
         return f"{sign}${val:.1f}"
 
-# --- CÁLCULOS CUÁNTICOS DE OPCIONES & GRIEGAS ---
+# --- CÁLCULOS CUÁNTICOS DE OPCIONES & TODAS LAS GRIEGAS ---
 if not df_curr.empty:
     exp_date_part = exp_0dte.split(':')[0] if ':' in exp_0dte else exp_0dte
     exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
@@ -341,21 +344,30 @@ if not df_curr.empty:
         ) / (spot_price * atm_iv * np.sqrt(T_exp)), axis=1
     )
     
+    # 1. GAMMA EXPOSURE (GEX)
     df_curr['call_gex'] = df_curr['gamma'] * df_curr['openInterest_c'] * (spot_price ** 2) * 0.01
     df_curr['put_gex'] = df_curr['gamma'] * df_curr['openInterest_p'] * (spot_price ** 2) * (-0.01)
     df_curr['net_gex'] = df_curr['call_gex'] + df_curr['put_gex']
 
+    # 2. DELTA EXPOSURE (DEX)
     df_curr['call_dex'] = df_curr['delta_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
     df_curr['put_dex'] = df_curr['delta_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
     df_curr['net_dex'] = df_curr['call_dex'] + df_curr['put_dex']
 
+    # 3. THETA EXPOSURE (TEX)
     df_curr['call_tex'] = df_curr['theta_c'] * df_curr['openInterest_c'] * 100
     df_curr['put_tex'] = df_curr['theta_p'] * df_curr['openInterest_p'] * 100
     df_curr['net_tex'] = df_curr['call_tex'] + df_curr['put_tex']
 
+    # 4. VEGA EXPOSURE (VEX)
     df_curr['call_vex'] = df_curr['vega_c'] * df_curr['openInterest_c'] * 100
     df_curr['put_vex'] = df_curr['vega_p'] * df_curr['openInterest_p'] * 100
     df_curr['net_vex'] = df_curr['call_vex'] + df_curr['put_vex']
+
+    # 5. RHO EXPOSURE (REX)
+    df_curr['call_rex'] = df_curr['rho_c'] * df_curr['openInterest_c'] * 100
+    df_curr['put_rex'] = df_curr['rho_p'] * df_curr['openInterest_p'] * 100
+    df_curr['net_rex'] = df_curr['call_rex'] + df_curr['put_rex']
 
     calls_dominant = df_curr[df_curr['net_gex'] > 0].sort_values('net_gex', ascending=False)
     top_calls = calls_dominant['strike'].tolist()
@@ -392,7 +404,7 @@ else:
     iv_str = "20.00%"
     iv_rank_str = "N/A"
 
-# --- EXPORTACIÓN PARA QUANTOWER Y CHATBOT FUTURO ---
+# --- EXPORTACIÓN A NUBE (JSONBIN) ---
 if JSONBIN_BIN_ID and JSONBIN_API_KEY:
     try:
         url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
@@ -426,13 +438,13 @@ if JSONBIN_BIN_ID and JSONBIN_API_KEY:
 min_strike = int(np.floor(spot_price - (strike_range * 0.8)))
 max_strike = int(np.ceil(spot_price + (strike_range * 0.8)))
 
-# --- PESTAÑAS RAÍZ REORGANIZADAS ---
-tab_gex, tab_greeks, tab_3d, tab_live, tab_data = st.tabs([
+# --- ORDEN DE PESTAÑAS PRINCIPALES SOLICITADO ---
+tab_gex, tab_live, tab_data, tab_greeks, tab_3d = st.tabs([
     "GEX INFO",
-    "GREEKS",
-    "SURFACE 3D",
     "LIVE GAMMA",
-    "DATA"
+    "DATA",
+    "GREEKS",
+    "SURFACE 3D"
 ])
 
 # --- 1. GEX INFO ---
@@ -488,60 +500,11 @@ with tab_gex:
             )
             st.plotly_chart(fig2, use_container_width=True)
 
-# --- 2. GREEKS ---
-with tab_greeks:
-    sub_grk1, sub_grk2 = st.tabs(["DELTA EXPOSURE (DEX)", "THETA & VEGA (TEX/VEX)"])
-    
-    with sub_grk1:
-        if not df_curr.empty:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            
-            fig_dex = go.Figure()
-            fig_dex.add_trace(go.Bar(
-                x=df_sub['strike'], y=df_sub['net_dex'],
-                name="Net DEX ($M)", marker_color='#3B82F6',
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net DEX:</b> $%{y:.2f}M<extra></extra>"
-            ))
-            fig_dex.add_vline(x=spot_price, line_color="#FFD700", line_width=1.5, line_dash="dash",
-                              annotation_text=f"Spot: ${spot_price:.2f}")
-
-            fig_dex.update_layout(
-                template="plotly_dark", plot_bgcolor='#07090E', paper_bgcolor='#07090E',
-                title="Delta Exposure Total (DEX) por Strike ($ Millones)",
-                xaxis_title="Strike ($)", yaxis_title="DEX ($ Millones)",
-                height=600, margin=dict(l=60, r=40, t=50, b=40)
-            )
-            st.plotly_chart(fig_dex, use_container_width=True)
-
-    with sub_grk2:
-        if not df_curr.empty:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            
-            fig_tv = make_subplots(
-                rows=2, cols=1,
-                subplot_titles=("Theta Exposure (Pérdida por Decaimiento Temporal $/día)", "Vega Exposure (Sensibilidad $/1% Cambio en IV)")
-            )
-            
-            fig_tv.add_trace(go.Bar(
-                x=df_sub['strike'], y=df_sub['net_tex'], name="Theta ($)", marker_color='#F59E0B'
-            ), row=1, col=1)
-            
-            fig_tv.add_trace(go.Bar(
-                x=df_sub['strike'], y=df_sub['net_vex'], name="Vega ($)", marker_color='#8B5CF6'
-            ), row=2, col=1)
-            
-            fig_tv.update_layout(
-                template="plotly_dark", plot_bgcolor='#07090E', paper_bgcolor='#07090E',
-                height=650, showlegend=False, margin=dict(l=60, r=40, t=50, b=40)
-            )
-            st.plotly_chart(fig_tv, use_container_width=True)
-
-# --- PREPARACIÓN Y ALINEACIÓN DE DATOS TEMPORALES DEL DÍA DE HOY ---
+# --- PREPARACIÓN TEMPORAL (INTRADAY HISTORIA) ---
 h_1m = fetch_history_schwab(ticker_symbol)
 
 if not h_1m.empty:
     h_1m = h_1m.tz_convert(tz_target)
-    
     today_date_str = now_tz.strftime('%Y-%m-%d')
     h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
     
@@ -581,7 +544,7 @@ if not df_curr.empty and len(full_timestamps) > 0:
     days_to_exp = max((exp_dt - ref_today).days, 0)
     T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
 
-    sigma_k = 0.32  # Leve ajuste para eliminar rigidez de bordes
+    sigma_k = 0.32
 
     for t_idx, S_t in enumerate(full_spots):
         if S_t <= 0 or np.isnan(S_t): continue
@@ -599,68 +562,9 @@ if not df_curr.empty and len(full_timestamps) > 0:
             Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
 
     if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
-        # Suavizado Gaussiano optimizado
         Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
 
-# --- 3. SURFACE 3D ---
-with tab_3d:
-    if Z_matrix_real.shape[1] > 1:
-        max_abs_gex = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
-
-        Z_surface_display = np.sign(Z_matrix_real) * (np.abs(Z_matrix_real / max_abs_gex) ** 0.45) * max_abs_gex
-
-        fig3 = go.Figure(data=[go.Surface(
-            x=full_timestamps,
-            y=fine_strikes,
-            z=Z_surface_display,
-            cmin=-max_abs_gex,
-            cmax=max_abs_gex,
-            colorscale=[
-                [0.0, '#FF1744'],
-                [0.35, '#2A1215'],
-                [0.5, '#07090E'],
-                [0.65, '#122A1E'],
-                [1.0, '#00E676']
-            ],
-            lighting=dict(
-                ambient=0.6,
-                diffuse=0.8,
-                fresnel=0.2,
-                specular=0.4,
-                roughness=0.3
-            ),
-            contours=dict(
-                z=dict(
-                    show=True,
-                    usecolormap=True,
-                    highlightcolor="#FFFFFF",
-                    project_z=True
-                )
-            )
-        )])
-
-        fig3.update_layout(
-            template="plotly_dark",
-            paper_bgcolor='#07090E',
-            title="Superficie Intradía Continuada de Gamma Exposición (3D Continuous Surface)",
-            scene=dict(
-                xaxis_title='Hora',
-                yaxis_title='Strike ($)',
-                zaxis_title='Net GEX Amplificado ($)',
-                aspectratio=dict(x=1.6, y=1.2, z=0.6),
-                camera=dict(
-                    eye=dict(x=1.6, y=-1.6, z=1.0)
-                ),
-                xaxis=dict(gridcolor="#1E2433", backgroundcolor="#07090E"),
-                yaxis=dict(gridcolor="#1E2433", backgroundcolor="#07090E"),
-                zaxis=dict(gridcolor="#1E2433", backgroundcolor="#07090E")
-            ),
-            height=680,
-            margin=dict(l=20, r=20, t=50, b=20)
-        )
-        st.plotly_chart(fig3, use_container_width=True)
-
-# --- 4. LIVE GAMMA (ANTES GAMMA DEPTH HEATMAP) ---
+# --- 2. LIVE GAMMA ---
 with tab_live:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
     st.markdown(f"<h3 style='margin-top:0; font-weight:700; color:#F0F6FC; font-size:1.1rem;'>🌊 Profundidad de Gamma Dinámica ({tz_choice})</h3>", unsafe_allow_html=True)
@@ -676,14 +580,11 @@ with tab_live:
 
     if len(full_timestamps) > 0 and Z_matrix_real.shape[1] > 0:
         custom_hover_matrix = [[fmt_val(val) for val in row] for row in Z_matrix_real]
-        
         max_real_abs = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
-        
         Z_matrix_scaled = Z_matrix_real / max_real_abs
 
         fig4 = go.Figure()
 
-        # zsmooth='best' ELIMINA EL ASPECTO DE BLOQUES/PIXELES Y SUAVIZA SUTILMENTE LOS NIVELES
         fig4.add_trace(go.Heatmap(
             x=full_timestamps,
             y=fine_strikes,
@@ -760,7 +661,7 @@ with tab_live:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 5. DATA (INFORMÁTICA Y MATRIZ EN UNA PESTAÑA DEDICADA) ---
+# --- 3. DATA ---
 with tab_data:
     sub_dt1, sub_dt2 = st.tabs(["TODAY'S DATA", "DATA GRID"])
     
@@ -781,10 +682,161 @@ with tab_data:
     with sub_dt2:
         if not df_curr.empty:
             st.dataframe(
-                df_curr[['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex']],
+                df_curr[['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex', 'net_rex']],
                 use_container_width=True,
                 height=600
             )
+
+# --- 4. GREEKS (CADA GRIEO EN SU PESTAÑA DEDICADA) ---
+with tab_greeks:
+    sub_dex, sub_tex, sub_vex, sub_rex = st.tabs([
+        "DELTA EXPOSURE (DEX)",
+        "THETA EXPOSURE (TEX)",
+        "VEGA EXPOSURE (VEX)",
+        "RHO EXPOSURE (REX)"
+    ])
+    
+    # --- DELTA ---
+    with sub_dex:
+        if not df_curr.empty:
+            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            fig_dex = go.Figure()
+            fig_dex.add_trace(go.Bar(
+                x=df_sub['strike'], y=df_sub['net_dex'],
+                name="Net DEX ($M)", marker_color='#3B82F6',
+                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net DEX:</b> $%{y:.2f}M<extra></extra>"
+            ))
+            fig_dex.add_vline(x=spot_price, line_color="#FFD700", line_width=1.5, line_dash="dash",
+                              annotation_text=f"Spot: ${spot_price:.2f}")
+
+            fig_dex.update_layout(
+                template="plotly_dark", plot_bgcolor='#07090E', paper_bgcolor='#07090E',
+                title="Delta Exposure Total (DEX) por Strike ($ Millones)",
+                xaxis_title="Strike ($)", yaxis_title="DEX ($ Millones)",
+                height=600, margin=dict(l=60, r=40, t=50, b=40)
+            )
+            st.plotly_chart(fig_dex, use_container_width=True)
+
+    # --- THETA ---
+    with sub_tex:
+        if not df_curr.empty:
+            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            fig_tex = go.Figure()
+            fig_tex.add_trace(go.Bar(
+                x=df_sub['strike'], y=df_sub['net_tex'],
+                name="Net TEX ($)", marker_color='#F59E0B',
+                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net TEX:</b> $%{y:,.0f}<extra></extra>"
+            ))
+            fig_tex.add_vline(x=spot_price, line_color="#FFD700", line_width=1.5, line_dash="dash",
+                              annotation_text=f"Spot: ${spot_price:.2f}")
+
+            fig_tex.update_layout(
+                template="plotly_dark", plot_bgcolor='#07090E', paper_bgcolor='#07090E',
+                title="Theta Exposure Total (TEX - Pérdida por Decaimiento Temporal $/día)",
+                xaxis_title="Strike ($)", yaxis_title="TEX ($/día)",
+                height=600, margin=dict(l=60, r=40, t=50, b=40)
+            )
+            st.plotly_chart(fig_tex, use_container_width=True)
+
+    # --- VEGA ---
+    with sub_vex:
+        if not df_curr.empty:
+            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            fig_vex = go.Figure()
+            fig_vex.add_trace(go.Bar(
+                x=df_sub['strike'], y=df_sub['net_vex'],
+                name="Net VEX ($)", marker_color='#8B5CF6',
+                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net VEX:</b> $%{y:,.0f}<extra></extra>"
+            ))
+            fig_vex.add_vline(x=spot_price, line_color="#FFD700", line_width=1.5, line_dash="dash",
+                              annotation_text=f"Spot: ${spot_price:.2f}")
+
+            fig_vex.update_layout(
+                template="plotly_dark", plot_bgcolor='#07090E', paper_bgcolor='#07090E',
+                title="Vega Exposure Total (VEX - Sensibilidad $/1% Cambio en IV)",
+                xaxis_title="Strike ($)", yaxis_title="VEX ($/1% IV)",
+                height=600, margin=dict(l=60, r=40, t=50, b=40)
+            )
+            st.plotly_chart(fig_vex, use_container_width=True)
+
+    # --- RHO ---
+    with sub_rex:
+        if not df_curr.empty:
+            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            fig_rex = go.Figure()
+            fig_rex.add_trace(go.Bar(
+                x=df_sub['strike'], y=df_sub['net_rex'],
+                name="Net REX ($)", marker_color='#10B981',
+                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net REX:</b> $%{y:,.0f}<extra></extra>"
+            ))
+            fig_rex.add_vline(x=spot_price, line_color="#FFD700", line_width=1.5, line_dash="dash",
+                              annotation_text=f"Spot: ${spot_price:.2f}")
+
+            fig_rex.update_layout(
+                template="plotly_dark", plot_bgcolor='#07090E', paper_bgcolor='#07090E',
+                title="Rho Exposure Total (REX - Sensibilidad $/1% Cambio en Tasa de Interés)",
+                xaxis_title="Strike ($)", yaxis_title="REX ($/1% Tasa)",
+                height=600, margin=dict(l=60, r=40, t=50, b=40)
+            )
+            st.plotly_chart(fig_rex, use_container_width=True)
+
+# --- 5. SURFACE 3D ---
+with tab_3d:
+    if Z_matrix_real.shape[1] > 1:
+        max_abs_gex = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
+
+        Z_surface_display = np.sign(Z_matrix_real) * (np.abs(Z_matrix_real / max_abs_gex) ** 0.45) * max_abs_gex
+
+        fig3 = go.Figure(data=[go.Surface(
+            x=full_timestamps,
+            y=fine_strikes,
+            z=Z_surface_display,
+            cmin=-max_abs_gex,
+            cmax=max_abs_gex,
+            colorscale=[
+                [0.0, '#FF1744'],
+                [0.35, '#2A1215'],
+                [0.5, '#07090E'],
+                [0.65, '#122A1E'],
+                [1.0, '#00E676']
+            ],
+            lighting=dict(
+                ambient=0.6,
+                diffuse=0.8,
+                fresnel=0.2,
+                specular=0.4,
+                roughness=0.3
+            ),
+            contours=dict(
+                z=dict(
+                    show=True,
+                    usecolormap=True,
+                    highlightcolor="#FFFFFF",
+                    project_z=True
+                )
+            )
+        )])
+
+        fig3.update_layout(
+            template="plotly_dark",
+            paper_bgcolor='#07090E',
+            title="Superficie Intradía Continuada de Gamma Exposición (3D Continuous Surface)",
+            scene=dict(
+                xaxis_title='Hora',
+                yaxis_title='Strike ($)',
+                zaxis_title='Net GEX Amplificado ($)',
+                aspectratio=dict(x=1.6, y=1.2, z=0.6),
+                camera=dict(
+                    eye=dict(x=1.6, y=-1.6, z=1.0)
+                ),
+                xaxis=dict(gridcolor="#1E2433", backgroundcolor="#07090E"),
+                yaxis=dict(gridcolor="#1E2433", backgroundcolor="#07090E"),
+                zaxis=dict(gridcolor="#1E2433", backgroundcolor="#07090E")
+            ),
+            height=680,
+            margin=dict(l=20, r=20, t=50, b=20)
+        )
+        st.plotly_chart(fig3, use_container_width=True)
 
 # --- BUCLE DE AUTO-REFRESCO AL FINAL ---
 if auto_refresh:
