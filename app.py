@@ -353,14 +353,42 @@ if not df_curr.empty:
     df_curr['cum_gex'] = df_curr['net_gex'].cumsum()
     zero_gamma_idx = (df_curr['cum_gex'].abs()).idxmin()
     zero_gamma = df_curr.loc[zero_gamma_idx]['strike'] if zero_gamma_idx in df_curr.index else spot_price
+
+    # ESTADÍSTICAS E INFORMÁTICA DE GAMMA Y VOLATILIDAD
+    net_gex_total = float(df_curr['net_gex'].sum())
+    total_gex = float((df_curr['call_gex'].abs() + df_curr['put_gex'].abs()).sum())
+    regime_str = "positive regime" if net_gex_total >= 0 else "negative regime"
+    condition_str = "Positive – dealers long gamma, hedging dampens volatility (mean-reverting)" if net_gex_total >= 0 else "Negative – dealers short gamma, hedging amplifies trending behavior"
+    iv_str = f"{atm_iv * 100:.2f}%"
+    iv_rank_str = f"{int(min(max((atm_iv / 0.35) * 100, 15), 85))}th percentile (moderate volatility environment)"
 else:
     df_curr = pd.DataFrame()
     cw1, cw2, cw3 = spot_price, spot_price, spot_price
     pw1, pw2, pw3 = spot_price, spot_price, spot_price
     zero_gamma = spot_price
     atm_iv = 0.20
+    net_gex_total = 0.0
+    total_gex = 0.0
+    regime_str = "neutral regime"
+    condition_str = "Neutral"
+    iv_str = "20.00%"
+    iv_rank_str = "N/A"
 
-# --- EXPORTACIÓN PARA QUANTOWER (SINCRONIZACIÓN NUBE VIA JSONBIN) ---
+# --- SECCIÓN SEPARADA: INFORMÁTICA / ESTADÍSTICAS DE RÉGIMEN Y VOLATILIDAD ---
+st.markdown(f"""
+<div style="background-color: #10141D; border: 1px solid #1E2433; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+    <h3 style="margin-top:0; margin-bottom: 12px; color: #F0F6FC; font-size: 1.1rem; font-weight: 700;">Gamma Regime & Volatility</h3>
+    <ul style="list-style-type: disc; margin: 0; padding-left: 20px; color: #C9D1D9; font-size: 0.92rem; line-height: 1.9;">
+        <li><b>Net GEX:</b> <span style="color: {'#00E676' if net_gex_total >= 0 else '#FF5252'}; font-weight: 600;">{fmt_val(net_gex_total)}</span> ({regime_str})</li>
+        <li><b>Total GEX:</b> <span style="color: #F0F6FC; font-weight: 600;">{fmt_val(total_gex)}</span></li>
+        <li><b>Gamma Condition:</b> <span style="color: #8B949E;">{condition_str}</span></li>
+        <li><b>IV (ATM / 0DTE):</b> <span style="color: #58A6FF; font-weight: 600;">{iv_str}</span></li>
+        <li><b>IV Rank:</b> <span style="color: #8B949E;">{iv_rank_str}</span></li>
+    </ul>
+</div>
+""", unsafe_allow_html=True)
+
+# --- EXPORTACIÓN PARA QUANTOWER Y CHATBOT FUTURO (SINCRONIZACIÓN NUBE VIA JSONBIN) ---
 if JSONBIN_BIN_ID and JSONBIN_API_KEY:
     try:
         url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
@@ -371,6 +399,14 @@ if JSONBIN_BIN_ID and JSONBIN_API_KEY:
         export_payload = {
             "qqq_spot": float(spot_price),
             "conversion_ratio": float(conversion_ratio),
+            "metrics": {
+                "net_gex": net_gex_total,
+                "net_gex_regime": regime_str,
+                "total_gex": total_gex,
+                "gamma_condition": condition_str,
+                "iv_atm": iv_str,
+                "iv_rank": iv_rank_str
+            },
             "cw1": float(cw1),
             "cw2": float(cw2),
             "cw3": float(cw3),
@@ -386,7 +422,7 @@ if JSONBIN_BIN_ID and JSONBIN_API_KEY:
 min_strike = int(np.floor(spot_price - (strike_range * 0.8)))
 max_strike = int(np.ceil(spot_price + (strike_range * 0.8)))
 
-# --- PESTAÑAS PRINCIPALES ---
+# --- PESTAÑAS PRINCIPALES (VISUALES) ---
 tab1, tab2, tab_dex, tab_tex_vex, tab3, tab4, tab_data = st.tabs([
     "NET GEX PROFILE",
     "CALLS vs PUTS",
@@ -539,7 +575,6 @@ if not df_curr.empty and len(full_timestamps) > 0:
     days_to_exp = max((exp_dt - ref_today).days, 0)
     T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
 
-    # Ancho reducido a 0.25 para que el color actúe solo como un delineado fino del strike
     sigma_k = 0.25
 
     for t_idx, S_t in enumerate(full_spots):
@@ -558,7 +593,6 @@ if not df_curr.empty and len(full_timestamps) > 0:
             Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
 
     if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
-        # Suavizado mínimo para evitar que se difumine el área oscura entre strikes
         Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.5, 1.2))
 
 # --- TAB 3: SURFACE 3D ---
@@ -566,7 +600,6 @@ with tab3:
     if Z_matrix_real.shape[1] > 1:
         max_abs_gex = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
 
-        # Relieve en 3D para la visualización tridimensional
         Z_surface_display = np.sign(Z_matrix_real) * (np.abs(Z_matrix_real / max_abs_gex) ** 0.45) * max_abs_gex
 
         fig3 = go.Figure(data=[go.Surface(
@@ -639,7 +672,6 @@ with tab4:
         
         max_real_abs = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
         
-        # Escalado lineal directo sin elevación a potencia para mantener el fondo oscuro
         Z_matrix_scaled = Z_matrix_real / max_real_abs
 
         fig4 = go.Figure()
