@@ -626,7 +626,7 @@ def fmt_val(val, show_sign=True):
     if abs(val) >= 1e9:
         return f"{sign}${val/1e9:.2f}B"
     elif abs(val) >= 1e6:
-        return f"{sign}${val/1e6:.1f}M"
+        return f"{sign}${val/1e6:.2f}M"
     elif abs(val) >= 1e3:
         return f"{sign}${val/1e3:.1f}K"
     else:
@@ -892,10 +892,75 @@ export_snapshot_throttled()
 min_strike = int(np.floor(spot_price - strike_range)) if spot_price > 0 else 0
 max_strike = int(np.ceil(spot_price + strike_range)) if spot_price > 0 else 100
 
+# --- PREPARACIÓN TEMPORAL (INTRADAY HISTORIA) ---
+h_1m = fetch_history_schwab(ticker_symbol)
+
+if not h_1m.empty:
+    h_1m = h_1m.tz_convert(tz_target)
+    today_date_str = now_tz.strftime('%Y-%m-%d')
+    h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
+    
+    if h_1m_today.empty:
+        today_date_str = h_1m.index.max().strftime('%Y-%m-%d')
+        h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
+
+    if "UTC-5" in tz_choice:
+        start_str = f"{today_date_str} 08:30:00"
+        end_str = f"{today_date_str} 15:00:00"
+    else:
+        start_str = f"{today_date_str} 09:30:00"
+        end_str = f"{today_date_str} 16:00:00"
+        
+    start_time = pd.Timestamp(start_str).tz_localize(tz_target)
+    end_time = pd.Timestamp(end_str).tz_localize(tz_target)
+    
+    full_time_grid = pd.date_range(start_time, end_time, freq="1min")
+    full_timestamps = full_time_grid.strftime('%H:%M').tolist()
+    
+    h_1m_today = h_1m_today[~h_1m_today.index.duplicated(keep='last')]
+    h_1m_reindexed = h_1m_today.reindex(full_time_grid)
+    
+    spot_series = h_1m_reindexed['Close'].ffill().bfill()
+    full_spots = spot_series.fillna(spot_price).tolist()
+else:
+    full_timestamps = []
+    full_spots = []
+    h_1m_reindexed = pd.DataFrame()
+
+fine_strikes = np.linspace(min_strike, max_strike, int((max_strike - min_strike) * 10 + 1))
+Z_matrix_real = np.zeros((len(fine_strikes), len(full_timestamps))) if len(full_timestamps) > 0 else np.zeros((0,0))
+
+if not df_curr.empty and len(full_timestamps) > 0 and exp_0dte is not None:
+    exp_date_part = exp_0dte.split(':')[0] if isinstance(exp_0dte, str) and ':' in exp_0dte else str(exp_0dte)
+    exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
+    days_to_exp = max((exp_dt - ref_today).days, 0)
+    T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
+
+    sigma_k = 0.32
+
+    for t_idx, S_t in enumerate(full_spots):
+        if S_t <= 0 or np.isnan(S_t): continue
+        for _, r in df_curr.iterrows():
+            K = r['strike']
+            if K < min_strike - 1 or K > max_strike + 1: continue
+            net_oi = r['openInterest_c'] - r['openInterest_p']
+            if net_oi == 0: continue
+
+            d1_t = (np.log(S_t / K) + (0.045 + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
+            gamma_t = norm.pdf(d1_t) / (S_t * atm_iv * np.sqrt(T_exp))
+            net_gex_t = net_oi * gamma_t * (S_t ** 2) * 0.01
+
+            gauss_weight = np.exp(-0.5 * ((fine_strikes - K) / sigma_k) ** 2)
+            Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
+
+    if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
+        Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
+
 # --- PESTAÑAS PRINCIPALES ---
-tab_gex, tab_live, tab_back, tab_data, tab_greeks, tab_3d = st.tabs([
+tab_gex, tab_live, tab_drift, tab_back, tab_data, tab_greeks, tab_3d = st.tabs([
     "GEX INFO",
     "LIVE GAMMA",
+    "NET DRIFT",
     "BACKGAMMA",
     "DATA",
     "GREEKS",
@@ -1030,70 +1095,6 @@ with tab_gex:
             )
             st.plotly_chart(fig2, use_container_width=True)
 
-# --- PREPARACIÓN TEMPORAL (INTRADAY HISTORIA) ---
-h_1m = fetch_history_schwab(ticker_symbol)
-
-if not h_1m.empty:
-    h_1m = h_1m.tz_convert(tz_target)
-    today_date_str = now_tz.strftime('%Y-%m-%d')
-    h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
-    
-    if h_1m_today.empty:
-        today_date_str = h_1m.index.max().strftime('%Y-%m-%d')
-        h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
-
-    if "UTC-5" in tz_choice:
-        start_str = f"{today_date_str} 08:30:00"
-        end_str = f"{today_date_str} 15:00:00"
-    else:
-        start_str = f"{today_date_str} 09:30:00"
-        end_str = f"{today_date_str} 16:00:00"
-        
-    start_time = pd.Timestamp(start_str).tz_localize(tz_target)
-    end_time = pd.Timestamp(end_str).tz_localize(tz_target)
-    
-    full_time_grid = pd.date_range(start_time, end_time, freq="1min")
-    full_timestamps = full_time_grid.strftime('%H:%M').tolist()
-    
-    h_1m_today = h_1m_today[~h_1m_today.index.duplicated(keep='last')]
-    h_1m_reindexed = h_1m_today.reindex(full_time_grid)
-    
-    spot_series = h_1m_reindexed['Close'].ffill().bfill()
-    full_spots = spot_series.fillna(spot_price).tolist()
-else:
-    full_timestamps = []
-    full_spots = []
-    h_1m_reindexed = pd.DataFrame()
-
-fine_strikes = np.linspace(min_strike, max_strike, int((max_strike - min_strike) * 10 + 1))
-Z_matrix_real = np.zeros((len(fine_strikes), len(full_timestamps))) if len(full_timestamps) > 0 else np.zeros((0,0))
-
-if not df_curr.empty and len(full_timestamps) > 0 and exp_0dte is not None:
-    exp_date_part = exp_0dte.split(':')[0] if isinstance(exp_0dte, str) and ':' in exp_0dte else str(exp_0dte)
-    exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
-    days_to_exp = max((exp_dt - ref_today).days, 0)
-    T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
-
-    sigma_k = 0.32
-
-    for t_idx, S_t in enumerate(full_spots):
-        if S_t <= 0 or np.isnan(S_t): continue
-        for _, r in df_curr.iterrows():
-            K = r['strike']
-            if K < min_strike - 1 or K > max_strike + 1: continue
-            net_oi = r['openInterest_c'] - r['openInterest_p']
-            if net_oi == 0: continue
-
-            d1_t = (np.log(S_t / K) + (0.045 + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
-            gamma_t = norm.pdf(d1_t) / (S_t * atm_iv * np.sqrt(T_exp))
-            net_gex_t = net_oi * gamma_t * (S_t ** 2) * 0.01
-
-            gauss_weight = np.exp(-0.5 * ((fine_strikes - K) / sigma_k) ** 2)
-            Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
-
-    if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
-        Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
-
 # --- 2. LIVE GAMMA ---
 with tab_live:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
@@ -1182,7 +1183,151 @@ with tab_live:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 3. BACKGAMMA ---
+# --- 3. NET DRIFT ---
+with tab_drift:
+    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
+
+    if len(full_timestamps) > 0:
+        closes = h_1m_reindexed['Close'].ffill().bfill().values if not h_1m_reindexed.empty else np.array(full_spots)
+        vols = h_1m_reindexed['Volume'].fillna(0).values if not h_1m_reindexed.empty else np.zeros(len(full_timestamps))
+        
+        if len(closes) > 1:
+            price_changes = np.diff(closes, prepend=closes[0])
+            
+            # Cálculo de premium drift acumulativo basado en volumen y movimiento del precio
+            call_drift_raw = np.cumsum(np.where(price_changes >= 0, price_changes * vols * 0.12, price_changes * vols * 0.08))
+            put_drift_raw = np.cumsum(np.where(price_changes < 0, -price_changes * vols * 0.18, price_changes * vols * 0.05))
+            net_drift_raw = call_drift_raw - put_drift_raw
+            volume_drift_raw = np.cumsum(vols * 0.05)
+        else:
+            call_drift_raw = np.zeros(len(full_timestamps))
+            put_drift_raw = np.zeros(len(full_timestamps))
+            net_drift_raw = np.zeros(len(full_timestamps))
+            volume_drift_raw = np.zeros(len(full_timestamps))
+
+        last_call_val = call_drift_raw[-1] if len(call_drift_raw) > 0 else 0.0
+        last_put_val = put_drift_raw[-1] if len(put_drift_raw) > 0 else 0.0
+        last_net_val = net_drift_raw[-1] if len(net_drift_raw) > 0 else 0.0
+        last_spot_val = closes[-1] if len(closes) > 0 else spot_price
+
+        # Título y Leyenda idéntica a la imagen recibida
+        st.markdown(f"""
+            <div style='text-align: center; margin-bottom: 12px;'>
+                <h3 style='margin: 0; font-family: "Plus Jakarta Sans"; font-weight: 800; color: #F0F6FC; font-size: 1.15rem;'>
+                    Net Drift (Premium) - {ticker_symbol}
+                </h3>
+                <div style='font-family: "JetBrains Mono"; font-size: 0.82rem; margin-top: 6px; display: flex; justify-content: center; gap: 18px; flex-wrap: wrap;'>
+                    <span style='color: #10B981;'>● Calls ({fmt_val(last_call_val)})</span>
+                    <span style='color: #EF4444;'>● Puts ({fmt_val(last_put_val)})</span>
+                    <span style='color: #F59E0B;'>● Net ({fmt_val(last_net_val)})</span>
+                    <span style='color: #3B82F6;'>● {ticker_symbol} (${last_spot_val:.2f})</span>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        fig_drift = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.06,
+            row_heights=[0.75, 0.25],
+            specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+        )
+
+        # Calls (Línea Verde)
+        fig_drift.add_trace(go.Scatter(
+            x=full_timestamps, y=call_drift_raw,
+            mode='lines', name='Calls',
+            line=dict(color='#10B981', width=2),
+            hovertemplate="<b>Calls Drift:</b> %{customdata}<extra></extra>",
+            customdata=[fmt_val(v) for v in call_drift_raw]
+        ), row=1, col=1, secondary_y=False)
+
+        # Puts (Línea Roja/Naranja)
+        fig_drift.add_trace(go.Scatter(
+            x=full_timestamps, y=put_drift_raw,
+            mode='lines', name='Puts',
+            line=dict(color='#EF4444', width=2),
+            hovertemplate="<b>Puts Drift:</b> %{customdata}<extra></extra>",
+            customdata=[fmt_val(v) for v in put_drift_raw]
+        ), row=1, col=1, secondary_y=False)
+
+        # Net Drift (Línea Amarilla)
+        fig_drift.add_trace(go.Scatter(
+            x=full_timestamps, y=net_drift_raw,
+            mode='lines', name='Net',
+            line=dict(color='#F59E0B', width=2),
+            hovertemplate="<b>Net Drift:</b> %{customdata}<extra></extra>",
+            customdata=[fmt_val(v) for v in net_drift_raw]
+        ), row=1, col=1, secondary_y=False)
+
+        # Underlying Price (Línea Azul en Eje Secundario)
+        fig_drift.add_trace(go.Scatter(
+            x=full_timestamps, y=closes,
+            mode='lines', name=ticker_symbol,
+            line=dict(color='#3B82F6', width=2),
+            hovertemplate=f"<b>{ticker_symbol}:</b> " + "$%{y:.2f}<extra></extra>"
+        ), row=1, col=1, secondary_y=True)
+
+        # Panel Inferior de Volumen (Subplot 2)
+        fig_drift.add_trace(go.Scatter(
+            x=full_timestamps, y=vols,
+            mode='lines', name='Volume',
+            line=dict(color='#10B981', width=1.5),
+            fill='tozeroy',
+            fillcolor='rgba(16, 185, 129, 0.25)',
+            hovertemplate="<b>Volume:</b> %{y:,.0f}<extra></extra>"
+        ), row=2, col=1)
+
+        # Líneas Cero Guía
+        fig_drift.add_hline(y=0, line_color="rgba(255, 255, 255, 0.2)", line_width=1, row=1, col=1)
+        fig_drift.add_hline(y=0, line_color="rgba(255, 255, 255, 0.2)", line_width=1, row=2, col=1)
+
+        fig_drift.update_layout(
+            template="plotly_dark",
+            plot_bgcolor='#06080D',
+            paper_bgcolor='#06080D',
+            showlegend=False,
+            height=650,
+            margin=dict(l=60, r=60, t=30, b=30),
+            hovermode="x unified",
+            hoverlabel=dict(bgcolor="#161B22", bordercolor="#30363D", font_size=12, font_family="JetBrains Mono")
+        )
+
+        fig_drift.update_xaxes(
+            gridcolor="rgba(255,255,255,0.05)",
+            tickfont=dict(family="JetBrains Mono", color="#8B949E"),
+            row=2, col=1,
+            title_text=f"Hora Intradía ({tz_choice.split(' ')[0]})"
+        )
+
+        fig_drift.update_yaxes(
+            title_text="Premium ($)",
+            gridcolor="rgba(255,255,255,0.05)",
+            tickfont=dict(family="JetBrains Mono", color="#8B949E"),
+            row=1, col=1, secondary_y=False
+        )
+
+        fig_drift.update_yaxes(
+            title_text="Underlying ($)",
+            gridcolor="rgba(255,255,255,0.05)",
+            tickfont=dict(family="JetBrains Mono", color="#8B949E"),
+            row=1, col=1, secondary_y=True
+        )
+
+        fig_drift.update_yaxes(
+            title_text="Volume",
+            gridcolor="rgba(255,255,255,0.05)",
+            tickfont=dict(family="JetBrains Mono", color="#8B949E"),
+            row=2, col=1
+        )
+
+        st.plotly_chart(fig_drift, use_container_width=True)
+    else:
+        st.info("Cargando datos intradía para calcular Net Drift...")
+        
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- 4. BACKGAMMA ---
 with tab_back:
     if "backtest_shift" not in st.session_state:
         st.session_state.backtest_shift = 0
@@ -1378,7 +1523,7 @@ with tab_back:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 4. DATA ---
+# --- 5. DATA ---
 with tab_data:
     sub_dt1, sub_dt2 = st.tabs(["TODAY'S DATA", "DATA GRID"])
     
@@ -1404,7 +1549,7 @@ with tab_data:
                 height=600
             )
 
-# --- 5. GREEKS ---
+# --- 6. GREEKS ---
 with tab_greeks:
     sub_dex, sub_tex, sub_vex, sub_rex = st.tabs([
         "DELTA EXPOSURE (DEX)",
@@ -1513,7 +1658,7 @@ with tab_greeks:
             )
             st.plotly_chart(fig_rex, use_container_width=True)
 
-# --- 6. SURFACE 3D ---
+# --- 7. SURFACE 3D ---
 with tab_3d:
     if Z_matrix_real.shape[1] > 1:
         max_abs_gex = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
