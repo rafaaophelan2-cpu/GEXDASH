@@ -709,6 +709,11 @@ if not df_curr.empty and exp_0dte is not None:
     put_oi_sum = int(df_curr['openInterest_p'].sum())
     total_oi_sum = call_oi_sum + put_oi_sum
 
+    net_dex_total = float(df_curr['net_dex'].sum())
+    net_tex_total = float(df_curr['net_tex'].sum())
+    net_vex_total = float(df_curr['net_vex'].sum())
+    net_rex_total = float(df_curr['net_rex'].sum())
+
     regime_str = "positive regime" if net_gex_total >= 0 else "negative regime"
     condition_str = "Positive – dealers long gamma, hedging dampens volatility (mean-reverting)" if net_gex_total >= 0 else "Negative – dealers short gamma, hedging amplifies trending behavior"
     iv_str = f"{atm_iv * 100:.2f}%"
@@ -722,27 +727,41 @@ else:
     net_gex_total = 0.0
     call_gex_sum, put_gex_sum, total_gex = 0.0, 0.0, 0.0
     call_oi_sum, put_oi_sum, total_oi_sum = 0, 0, 0
+    net_dex_total, net_tex_total, net_vex_total, net_rex_total = 0.0, 0.0, 0.0, 0.0
     regime_str = "neutral regime"
     condition_str = "Neutral"
     iv_str = "20.00%"
     iv_rank_str = "N/A"
 
-# --- ASISTENTE IA ---
+# --- ASISTENTE IA ENRIQUECIDO ---
 @st.cache_data(ttl=1800, show_spinner=False)
-def consultar_ia_cache(tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, net_gex_total, regime_str, call_gex_sum, put_gex_sum, total_gex, cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma, iv_str, condition_str):
+def consultar_ia_cache(
+    tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, conversion_ratio,
+    net_gex_total, regime_str, call_gex_sum, put_gex_sum, total_gex,
+    call_oi_sum, put_oi_sum, total_oi_sum,
+    cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
+    iv_str, iv_rank_str, condition_str,
+    net_dex_total, net_tex_total, net_vex_total, net_rex_total
+):
     system_prompt = f"""
     Eres un analista cuantitativo experto en estructura de opciones, Gamma Exposure (GEX) y microestructura de mercado.
     Responde en español de forma analítica, directa y profesional usando viñetas.
 
     Métricas actuales del mercado ({ticker_symbol}):
-    - Spot Price: ${spot_price:.2f}
+    - Spot Price: ${spot_price:.2f} (Ratio NQ/QQQ: {conversion_ratio:.4f})
+    - Interés Abierto (OI): Calls = {call_oi_sum:,} | Puts = {put_oi_sum:,} | Total = {total_oi_sum:,}
     - Net GEX Total: {fmt_val(net_gex_total)} ({regime_str})
-    - Call GEX: {fmt_val(call_gex_sum)} | Put GEX: {fmt_val(put_gex_sum)} | Total GEX: {fmt_val(total_gex, show_sign=False)}
-    - Call Walls: CW1=${cw1:.0f}, CW2=${cw2:.0f}, CW3=${cw3:.0f}
-    - Put Walls: PW1=${pw1:.0f}, PW2=${pw2:.0f}, PW3=${pw3:.0f}
+    - Desglose GEX: Call GEX = {fmt_val(call_gex_sum)} | Put GEX = {fmt_val(put_gex_sum)} | Total GEX = {fmt_val(total_gex, show_sign=False)}
+    - Call Walls: CW1 = ${cw1:.0f}, CW2 = ${cw2:.0f}, CW3 = ${cw3:.0f}
+    - Put Walls: PW1 = ${pw1:.0f}, PW2 = ${pw2:.0f}, PW3 = ${pw3:.0f}
     - Zero Gamma (Flip Level): ${zero_gamma:.2f}
-    - Volatilidad Implícita (ATM): {iv_str}
-    - Condición de Mercado: {condition_str}
+    - Volatilidad: IV ATM = {iv_str} | Percentil IV Rank = {iv_rank_str}
+    - Condición de Gamma: {condition_str}
+    - Exposiciones Acumuladas de Grecas:
+      * Delta Exposure (DEX): ${net_dex_total:.2f}M
+      * Theta Exposure (TEX): ${net_tex_total:,.0f}/día
+      * Vega Exposure (VEX): ${net_vex_total:,.0f}/1% IV
+      * Rho Exposure (REX): ${net_rex_total:,.0f}/1% Tasa
     """
 
     prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado enfocándote en {tipo_analisis}."
@@ -766,10 +785,18 @@ def consultar_ia_cache(tipo_analisis, mensaje_usuario, ticker_symbol, spot_price
     return "Ocurrió un error al procesar la solicitud de IA."
 
 def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
+    net_dex_val = float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0
+    net_tex_val = float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0
+    net_vex_val = float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0
+    net_rex_val = float(df_curr['net_rex'].sum()) if not df_curr.empty and 'net_rex' in df_curr.columns else 0.0
+
     return consultar_ia_cache(
-        tipo_analisis, mensaje_usuario, ticker_symbol, spot_price,
+        tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, conversion_ratio,
         net_gex_total, regime_str, call_gex_sum, put_gex_sum, total_gex,
-        cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma, iv_str, condition_str
+        call_oi_sum, put_oi_sum, total_oi_sum,
+        cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
+        iv_str, iv_rank_str, condition_str,
+        net_dex_val, net_tex_val, net_vex_val, net_rex_val
     )
 
 # --- WIDGET CHATBOT EN SIDEBAR ---
@@ -1210,7 +1237,6 @@ with tab_drift:
         last_net_val = net_drift_raw[-1] if len(net_drift_raw) > 0 else 0.0
         last_spot_val = closes[-1] if len(closes) > 0 else spot_price
 
-        # Título y Leyenda idéntica a la imagen recibida
         st.markdown(f"""
             <div style='text-align: center; margin-bottom: 12px;'>
                 <h3 style='margin: 0; font-family: "Plus Jakarta Sans"; font-weight: 800; color: #F0F6FC; font-size: 1.15rem;'>
