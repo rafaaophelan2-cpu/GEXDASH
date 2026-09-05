@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>BACKGAMMA - Perfil GEX</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { background: #12131C; color: #FFF; font-family: sans-serif; padding: 20px; }
+    textarea { width: 100%; height: 100px; background: #1E1F2E; color: #00FF88; border: 1px solid #333; padding: 10px; font-family: monospace; border-radius: 6px; }
+    button { background: #5865F2; color: #FFF; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px; }
+    .chart-box { width: 100%; max-width: 800px; margin-top: 20px; background: #191A26; padding: 15px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+
+  <h2>BACKGAMMA</h2>
+  <p>Pega el texto del perfil GEX:</p>
+  <textarea id="rawInput" placeholder="Pega el string aquí..."></textarea>
+  <br>
+  <button onclick="procesarYGraficar()">Generar Gráfica</button>
+
+  <div class="chart-box">
+    <canvas id="gexChart"></canvas>
+  </div>
+
+  <script>
+    // Configuración de Supabase
+    const SUPABASE_URL = 'https://TU_PROYECTO_REF.supabase.co'; // Reemplaza con la URL de tu proyecto Supabase (Project Settings -> API)
+    const SUPABASE_KEY = 'sb_publishable_MjjjCIL76e1GeH5vWV-FGQ_j95pKGe_';
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let myChart = null;
+
+    function procesarYGraficar() {
+      const text = document.getElementById('rawInput').value;
+      if (!text) return alert('Ingresa texto.');
+
+      const lines = text.split('\n');
+      const strikes = [];
+      const netGex = [];
+
+      lines.forEach(line => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+          strikes.push(parts[0]);
+          netGex.push(parseFloat(parts[1]));
+        }
+      });
+
+      const ctx = document.getElementById('gexChart').getContext('2d');
+      if (myChart) myChart.destroy();
+
+      myChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: strikes,
+          datasets: [{
+            label: 'Net GEX',
+            data: netGex,
+            backgroundColor: netGex.map(v => v >= 0 ? '#00FF88' : '#FF4D4D')
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          scales: {
+            x: { grid: { color: '#2A2B3D' }, ticks: { color: '#888' } },
+            y: { grid: { color: '#2A2B3D' }, ticks: { color: '#FFF' } }
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>
