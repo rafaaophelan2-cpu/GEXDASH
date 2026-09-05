@@ -217,6 +217,29 @@ tz_target = "America/Lima" if "UTC-5" in tz_choice else "America/New_York"
 
 st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
 
+# --- NAVEGACIÓN TEMPORAL (TIMEFRAME & BOTONES BACK / NEXT) ---
+st.sidebar.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.75rem; font-weight:700; color:#8B949E; letter-spacing:1px; margin-bottom:6px;'>⏱️ NAVEGACIÓN TEMPORAL</p>", unsafe_allow_html=True)
+
+tf_minutes = st.sidebar.selectbox("TIMEFRAME (MINUTOS)", [1, 5, 15, 30, 60], index=0)
+
+if "time_shift" not in st.session_state:
+    st.session_state.time_shift = 0
+
+col_nav1, col_nav2, col_nav3 = st.sidebar.columns(3)
+with col_nav1:
+    if st.button("◀ Back", use_container_width=True):
+        st.session_state.time_shift -= tf_minutes
+with col_nav2:
+    if st.button("LIVE 🔴", use_container_width=True):
+        st.session_state.time_shift = 0
+with col_nav3:
+    if st.button("Next ▶", use_container_width=True):
+        st.session_state.time_shift += tf_minutes
+        if st.session_state.time_shift > 0:
+            st.session_state.time_shift = 0
+
+st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
+
 auto_refresh = st.sidebar.toggle("AUTO-REFRESCO EN VIVO", value=True)
 refresh_interval = st.sidebar.select_slider(
     "INTERVALO (SEGUNDOS)",
@@ -733,20 +756,37 @@ if not df_curr.empty and len(full_timestamps) > 0:
     if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
         Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
 
+# --- RECORTE/DESPLAZAMIENTO SEGÚN NAVEGACIÓN (BACK / NEXT) ---
+total_len = len(full_timestamps)
+if total_len > 0:
+    shift_idx = st.session_state.time_shift
+    target_len = max(1, min(total_len, total_len + shift_idx))
+    
+    display_timestamps = full_timestamps[:target_len]
+    display_h_1m = h_1m_reindexed.iloc[:target_len] if not h_1m_reindexed.empty else pd.DataFrame()
+    display_Z_matrix = Z_matrix_real[:, :target_len] if Z_matrix_real.shape[1] > 0 else Z_matrix_real
+else:
+    display_timestamps = full_timestamps
+    display_h_1m = h_1m_reindexed
+    display_Z_matrix = Z_matrix_real
+
 # --- 2. LIVE GAMMA ---
 with tab_live:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
     st.markdown(f"<h3 style='margin-top:0; font-weight:700; color:#F0F6FC; font-size:1.1rem;'>🌊 Profundidad de Gamma Dinámica ({tz_choice})</h3>", unsafe_allow_html=True)
 
-    if len(full_timestamps) > 0 and Z_matrix_real.shape[1] > 0:
-        custom_hover_matrix = [[fmt_val(val) for val in row] for row in Z_matrix_real]
-        max_real_abs = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
-        Z_matrix_scaled = Z_matrix_real / max_real_abs
+    if st.session_state.time_shift < 0 and len(display_timestamps) > 0:
+        st.info(f"⏳ **MODO HISTÓRICO REBOBINADO**: Viendo gráfico hasta las **{display_timestamps[-1]}** (Desplazamiento: **{st.session_state.time_shift} min**). Presiona **LIVE 🔴** en la barra lateral para volver al tiempo real.")
+
+    if len(display_timestamps) > 0 and display_Z_matrix.shape[1] > 0:
+        custom_hover_matrix = [[fmt_val(val) for val in row] for row in display_Z_matrix]
+        max_real_abs = float(np.max(np.abs(display_Z_matrix))) if np.max(np.abs(display_Z_matrix)) > 0 else 1.0
+        Z_matrix_scaled = display_Z_matrix / max_real_abs
 
         fig4 = go.Figure()
 
         fig4.add_trace(go.Heatmap(
-            x=full_timestamps,
+            x=display_timestamps,
             y=fine_strikes,
             z=Z_matrix_scaled,
             customdata=custom_hover_matrix,
@@ -791,13 +831,13 @@ with tab_live:
                 bgcolor="#090D16", bordercolor=main_color, borderwidth=1, borderpad=3, opacity=0.95
             )
 
-        if not h_1m_reindexed.empty:
+        if not display_h_1m.empty:
             fig4.add_trace(go.Candlestick(
-                x=full_timestamps,
-                open=h_1m_reindexed['Open'],
-                high=h_1m_reindexed['High'],
-                low=h_1m_reindexed['Low'],
-                close=h_1m_reindexed['Close'],
+                x=display_timestamps,
+                open=display_h_1m['Open'],
+                high=display_h_1m['High'],
+                low=display_h_1m['Low'],
+                close=display_h_1m['Close'],
                 name="Spot Price",
                 increasing_line_color='#10B981',
                 decreasing_line_color='#EF4444',
@@ -958,13 +998,13 @@ with tab_greeks:
 
 # --- 5. SURFACE 3D ---
 with tab_3d:
-    if Z_matrix_real.shape[1] > 1:
-        max_abs_gex = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
+    if display_Z_matrix.shape[1] > 1:
+        max_abs_gex = float(np.max(np.abs(display_Z_matrix))) if np.max(np.abs(display_Z_matrix)) > 0 else 1.0
 
-        Z_surface_display = np.sign(Z_matrix_real) * (np.abs(Z_matrix_real / max_abs_gex) ** 0.45) * max_abs_gex
+        Z_surface_display = np.sign(display_Z_matrix) * (np.abs(display_Z_matrix / max_abs_gex) ** 0.45) * max_abs_gex
 
         fig3 = go.Figure(data=[go.Surface(
-            x=full_timestamps,
+            x=display_timestamps,
             y=fine_strikes,
             z=Z_surface_display,
             cmin=-max_abs_gex,
