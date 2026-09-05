@@ -539,7 +539,7 @@ if JSONBIN_BIN_ID and JSONBIN_API_KEY:
 min_strike = int(np.floor(spot_price - strike_range))
 max_strike = int(np.ceil(spot_price + strike_range))
 
-# --- PESTAÑAS PRINCIPALES (CON NUEVA PESTAÑA BACKGAMMA) ---
+# --- PESTAÑAS PRINCIPALES ---
 tab_gex, tab_live, tab_back, tab_data, tab_greeks, tab_3d = st.tabs([
     "GEX INFO",
     "LIVE GAMMA",
@@ -951,6 +951,75 @@ with tab_back:
         )
 
         st.plotly_chart(fig_back, use_container_width=True, config={'scrollZoom': True}, key="heatmap_backtest")
+
+        # --- ADICIÓN: STRIKE PROFILE (NET GEX PROFILE) DENTRO DE BACKGAMMA ---
+        if not df_curr.empty:
+            st.markdown("<hr style='border-color:rgba(255,255,255,0.08); margin: 25px 0;'>", unsafe_allow_html=True)
+            
+            bt_spot_val = bt_h_1m['Close'].dropna().iloc[-1] if (not bt_h_1m.empty and 'Close' in bt_h_1m and len(bt_h_1m['Close'].dropna()) > 0) else spot_price
+
+            df_sub_bt = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            colors_bt = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub_bt['net_gex']]
+
+            x_min_raw, x_max_raw = df_sub_bt['strike'].min(), df_sub_bt['strike'].max()
+            x_mid = (x_min_raw + x_max_raw) / 2.0
+            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
+            x_min_val = x_mid - (x_half_span * 2.0)
+            x_max_val = x_mid + (x_half_span * 2.0)
+
+            y_max_val = df_sub_bt['net_gex'].max()
+            y_min_val = df_sub_bt['net_gex'].min()
+            y_max_adj = (max(y_max_val, 0) * 1.8) if y_max_val > 0 else 1000
+            y_min_adj = (min(y_min_val, 0) * 1.8) if y_min_val < 0 else -1000
+
+            fig_bt_profile = go.Figure()
+            fig_bt_profile.add_trace(go.Bar(
+                x=df_sub_bt['strike'],
+                y=df_sub_bt['net_gex'],
+                orientation='v',
+                marker_color=colors_bt,
+                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net GEX:</b> %{customdata}<extra></extra>",
+                customdata=[fmt_val(v) for v in df_sub_bt['net_gex']]
+            ))
+
+            fig_bt_profile.add_vline(
+                x=bt_spot_val,
+                line_color="#3B82F6",
+                line_width=1.5,
+                line_dash="dash",
+                annotation_text="Spot",
+                annotation_position="top",
+                annotation_font=dict(color="#60A5FA", size=11, family="JetBrains Mono")
+            )
+
+            fig_bt_profile.update_layout(
+                template="plotly_dark",
+                plot_bgcolor='#06080D',
+                paper_bgcolor='#06080D',
+                title=dict(
+                    text="<b>Strike Profile (Net Gamma Exposure) - Backtest Mode</b>",
+                    font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")
+                ),
+                xaxis=dict(
+                    title="Strike ($)",
+                    gridcolor="rgba(255,255,255,0.05)",
+                    tickfont=dict(family="JetBrains Mono", color="#8B949E"),
+                    zeroline=False,
+                    range=[x_min_val, x_max_val]
+                ),
+                yaxis=dict(
+                    title="Net GEX ($)",
+                    gridcolor="rgba(255,255,255,0.05)",
+                    tickfont=dict(family="JetBrains Mono", color="#8B949E"),
+                    zeroline=True,
+                    zerolinecolor="rgba(255,255,255,0.15)",
+                    zerolinewidth=1,
+                    range=[y_min_adj, y_max_adj]
+                ),
+                height=500,
+                margin=dict(l=50, r=40, t=50, b=40)
+            )
+            st.plotly_chart(fig_bt_profile, use_container_width=True, key="profile_backtest")
     else:
         st.warning("Sin datos intradía disponibles para ejecutar la simulación de backtesting.")
 
