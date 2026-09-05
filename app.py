@@ -310,13 +310,23 @@ if "chat_messages" not in st.session_state:
         except Exception:
             pass
 
+def clean_ai_response(text: str) -> str:
+    if not text:
+        return ""
+    # Elimina los símbolos $ que activan la notación matemática LaTeX en Streamlit
+    cleaned = text.replace("$", "")
+    # Elimina delimitadores LaTeX explícitos
+    cleaned = cleaned.replace(r"\(", "").replace(r"\)", "").replace(r"\[", "").replace(r"\]", "")
+    return cleaned
+
 def save_chat_message(role: str, content: str):
-    st.session_state.chat_messages.append({"role": role, "content": content})
+    cleaned_content = clean_ai_response(content) if role == "assistant" else content
+    st.session_state.chat_messages.append({"role": role, "content": cleaned_content})
     if supabase:
         try:
             supabase.table("chat_messages").insert({
                 "role": role,
-                "content": content
+                "content": cleaned_content
             }).execute()
         except Exception as e:
             log_to_console("Supabase Chat Insert Error", e)
@@ -376,7 +386,7 @@ def query_groq(system_prompt, user_prompt, api_key):
             ],
             temperature=0.3
         )
-        return completion.choices[0].message.content
+        return clean_ai_response(completion.choices[0].message.content)
     except ImportError:
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -392,7 +402,7 @@ def query_groq(system_prompt, user_prompt, api_key):
         }
         resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
         if resp.status_code == 200:
-            return resp.json()["choices"][0]["message"]["content"]
+            return clean_ai_response(resp.json()["choices"][0]["message"]["content"])
         else:
             raise Exception(f"Groq API Error {resp.status_code}: {resp.text}")
 
@@ -837,6 +847,12 @@ def consultar_ia_cache(
     Eres un analista cuantitativo experto en estructura de opciones, Gamma Exposure (GEX), flujo de prima intradía y microestructura de mercado.
     Responde en español de forma analítica, directa y profesional usando viñetas.
 
+    REGLAS ESTRICTAS DE FORMATO (OBLIGATORIO):
+    - PROHIBIDO USAR NOTACIÓN LATEX O MATEMÁTICA: JAMÁS utilices el símbolo de dólar ($) ni delimitadores LaTeX ($$, \(, \)).
+    - Escribe ÚNICAMENTE en texto plano legible en español con formato Markdown estándar (negritas y viñetas).
+    - MANTÉN ESPACIOS NORMALES ENTRE PALABRAS: Nunca concatenes palabras sin espacios.
+    - Para referirte a montos de dinero o precios, escribe la cifra seguida de 'USD' o 'dólares' (por ejemplo: 442.2K USD).
+
     REGLA DE CONTEXTO OBLIGATORIA (NET DRIFT):
     Tienes acceso en tiempo real a las métricas de Net Drift calculadas dinámicamente por la aplicación. JAMÁS digas que no tienes acceso al Net Drift, que no ejecutas código externo o que desconoces esta métrica.
     * Definición de Net Drift: Mide la presión y flujo direccional acumulado de prima en opciones intradía (Calls Drift vs Puts Drift). 
@@ -844,32 +860,33 @@ def consultar_ia_cache(
       - Net Drift negativo = Acumulación y presión de flujo en Puts.
 
     Métricas en tiempo real de Net Drift ({ticker_symbol}):
-    - Call Drift Acumulado: {fmt_val(last_call_drift)}
-    - Put Drift Acumulado: {fmt_val(last_put_drift)}
-    - Net Drift Total: {fmt_val(last_net_drift)}
+    - Call Drift Acumulado: {fmt_val(last_call_drift).replace('$', '')} USD
+    - Put Drift Acumulado: {fmt_val(last_put_drift).replace('$', '')} USD
+    - Net Drift Total: {fmt_val(last_net_drift).replace('$', '')} USD
 
     Métricas actuales del mercado ({ticker_symbol}):
-    - Spot Price: ${spot_price:.2f} (Ratio NQ/QQQ: {conversion_ratio:.4f})
+    - Spot Price: {spot_price:.2f} USD (Ratio NQ/QQQ: {conversion_ratio:.4f})
     - Interés Abierto (OI): Calls = {call_oi_sum:,} | Puts = {put_oi_sum:,} | Total = {total_oi_sum:,}
-    - Net GEX Total: {fmt_val(net_gex_total)} ({regime_str})
-    - Desglose GEX: Call GEX = {fmt_val(call_gex_sum)} | Put GEX = {fmt_val(put_gex_sum)} | Total GEX = {fmt_val(total_gex, show_sign=False)}
-    - Call Walls: CW1 = ${cw1:.0f}, CW2 = ${cw2:.0f}, CW3 = ${cw3:.0f}
-    - Put Walls: PW1 = ${pw1:.0f}, PW2 = ${pw2:.0f}, PW3 = ${pw3:.0f}
-    - Zero Gamma (Flip Level): ${zero_gamma:.2f}
+    - Net GEX Total: {fmt_val(net_gex_total).replace('$', '')} USD ({regime_str})
+    - Desglose GEX: Call GEX = {fmt_val(call_gex_sum).replace('$', '')} USD | Put GEX = {fmt_val(put_gex_sum).replace('$', '')} USD | Total GEX = {fmt_val(total_gex, show_sign=False).replace('$', '')} USD
+    - Call Walls: CW1 = {cw1:.0f} USD, CW2 = {cw2:.0f} USD, CW3 = {cw3:.0f} USD
+    - Put Walls: PW1 = {pw1:.0f} USD, PW2 = {pw2:.0f} USD, PW3 = {pw3:.0f} USD
+    - Zero Gamma (Flip Level): {zero_gamma:.2f} USD
     - Volatilidad: IV ATM = {iv_str} | Percentil IV Rank = {iv_rank_str}
     - Condición de Gamma: {condition_str}
     - Exposiciones Acumuladas de Grecas:
-      * Delta Exposure (DEX): ${net_dex_total:.2f}M
-      * Theta Exposure (TEX): ${net_tex_total:,.0f}/día
-      * Vega Exposure (VEX): ${net_vex_total:,.0f}/1% IV
-      * Rho Exposure (REX): ${net_rex_total:,.0f}/1% Tasa
+      * Delta Exposure (DEX): {net_dex_total:.2f}M USD
+      * Theta Exposure (TEX): {net_tex_total:,.0f} USD/día
+      * Vega Exposure (VEX): {net_vex_total:,.0f} USD/1% IV
+      * Rho Exposure (REX): {net_rex_total:,.0f} USD/1% Tasa
     """
 
     prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado integrando los niveles GEX y el Net Drift intradía para {tipo_analisis}."
 
     if GROQ_API_KEY:
         try:
-            return query_groq(system_prompt, prompt_final, GROQ_API_KEY)
+            raw_res = query_groq(system_prompt, prompt_final, GROQ_API_KEY)
+            return clean_ai_response(raw_res)
         except Exception as e_groq:
             log_to_console("Groq AI Engine", e_groq)
 
@@ -879,7 +896,7 @@ def consultar_ia_cache(
                 model='gemini-2.5-flash',
                 contents=f"{system_prompt}\n\nPregunta del usuario: {prompt_final}"
             )
-            return response.text
+            return clean_ai_response(response.text)
         except Exception as e_gemini:
             log_to_console("Gemini AI Engine", e_gemini)
 
