@@ -48,7 +48,7 @@ except Exception as e:
     st.error(f"Error al conectar con la API de Schwab: {e}")
     st.stop()
 
-# --- CLIENTE DE GEMINI 2.0 FLASH ---
+# --- CLIENTE DE GEMINI 3.6 FLASH ---
 @st.cache_resource
 def get_gemini_client():
     if GEMINI_API_KEY:
@@ -512,8 +512,9 @@ else:
     iv_str = "20.00%"
     iv_rank_str = "N/A"
 
-# --- ASISTENTE IA GEMINI 2.0 FLASH ---
-def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
+# --- ASISTENTE IA GEMINI 3.6 FLASH CACHEADO ---
+@st.cache_data(ttl=1800, show_spinner=False)
+def consultar_ia_cache(tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, net_gex_total, regime_str, call_gex_sum, put_gex_sum, total_gex, cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma, iv_str, condition_str):
     if not ai_client:
         return "⚠️ Configura 'GEMINI_API_KEY' en los Secrets de Streamlit para activar la IA."
 
@@ -536,12 +537,19 @@ def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
 
     try:
         response = ai_client.models.generate_content(
-            model='gemini-2.0-flash',
+            model='gemini-3.6-flash',
             contents=f"{system_prompt}\n\nPregunta del usuario: {prompt_final}"
         )
         return response.text
     except Exception as e:
         return f"Error al comunicarse con Gemini: {str(e)}"
+
+def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
+    return consultar_ia_cache(
+        tipo_analisis, mensaje_usuario, ticker_symbol, spot_price,
+        net_gex_total, regime_str, call_gex_sum, put_gex_sum, total_gex,
+        cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma, iv_str, condition_str
+    )
 
 # --- WIDGET CHATBOT EN SIDEBAR ---
 if "chat_messages" not in st.session_state:
@@ -941,7 +949,6 @@ with tab_back:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # RECORTE DE DATOS PARA BACKTEST
     total_len = len(full_timestamps)
     if total_len > 0:
         shift_idx = st.session_state.backtest_shift
