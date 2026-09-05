@@ -3,6 +3,7 @@ import json
 import time
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
@@ -208,11 +209,31 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- MÓDULO DE AUTENTICACIÓN ---
+# --- MÓDULO DE AUTENTICACIÓN Y PERSISTENCIA ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "user_email" not in st.session_state:
     st.session_state.user_email = ""
+
+# Auto-login si la opción "No cerrar sesión" está guardada en la URL o localStorage
+if not st.session_state.authenticated:
+    if "session_user" in st.query_params:
+        st.session_state.authenticated = True
+        st.session_state.user_email = st.query_params["session_user"]
+    else:
+        components.html(
+            """
+            <script>
+                const savedUser = localStorage.getItem('gex_active_user');
+                if (savedUser && !window.location.search.includes('session_user')) {
+                    const url = new URL(window.location.href);
+                    url.searchParams.set('session_user', savedUser);
+                    window.location.href = url.toString();
+                }
+            </script>
+            """,
+            height=0,
+        )
 
 def login_user(email, password):
     if supabase:
@@ -240,21 +261,7 @@ def login_user(email, password):
 
     return False, "Usuario o contraseña incorrectos."
 
-def register_user(email, password):
-    if supabase:
-        try:
-            res = supabase.auth.sign_up({"email": email, "password": password})
-            if res.user:
-                return True, "Registro exitoso en Supabase Auth. Ya puedes iniciar sesión."
-        except Exception:
-            try:
-                supabase.table("users").insert({"email": email, "password": password}).execute()
-                return True, "Registro exitoso en la base de datos."
-            except Exception as e:
-                return False, f"Error en registro: {e}"
-    return False, "El registro requiere conexión activa con Supabase."
-
-# --- PANTALLA DE LOGIN / REGISTRO ---
+# --- PANTALLA EXCLUSIVA DE LOGIN (CAMPOS EN BLANCO Y SIN REGISTRO) ---
 if not st.session_state.authenticated:
     st.markdown("<div style='height:60px;'></div>", unsafe_allow_html=True)
     col_center = st.columns([1, 1.8, 1])[1]
@@ -266,35 +273,32 @@ if not st.session_state.authenticated:
             </div>
         """, unsafe_allow_html=True)
         
-        tab_log, tab_reg = st.tabs(["🔑 Iniciar Sesión", "📝 Registrarse"])
-        
-        with tab_log:
-            with st.form("login_form"):
-                email_in = st.text_input("Correo electrónico / Usuario", value="admin@gex.com")
-                pass_in = st.text_input("Contraseña", type="password", value="admin123")
-                btn_login = st.form_submit_button("INGRESAR AL TERMINAL", use_container_width=True)
-                if btn_login:
+        with st.form("login_form"):
+            email_in = st.text_input("Correo electrónico / Usuario", value="")
+            pass_in = st.text_input("Contraseña", type="password", value="")
+            remember_me = st.checkbox("No cerrar sesión")
+            btn_login = st.form_submit_button("INGRESAR AL TERMINAL", use_container_width=True)
+            
+            if btn_login:
+                if not email_in or not pass_in:
+                    st.warning("Por favor ingresa tu usuario y contraseña.")
+                else:
                     ok, msg = login_user(email_in, pass_in)
                     if ok:
+                        if remember_me:
+                            st.query_params["session_user"] = email_in
+                            components.html(
+                                f"""
+                                <script>
+                                    localStorage.setItem('gex_active_user', '{email_in}');
+                                </script>
+                                """,
+                                height=0,
+                            )
                         st.success(msg)
                         st.rerun()
                     else:
                         st.error(msg)
-
-        with tab_reg:
-            with st.form("register_form"):
-                reg_email = st.text_input("Correo electrónico")
-                reg_pass = st.text_input("Contraseña", type="password")
-                btn_reg = st.form_submit_button("CREAR CUENTA", use_container_width=True)
-                if btn_reg:
-                    if not reg_email or not reg_pass:
-                        st.warning("Completa todos los campos.")
-                    else:
-                        ok, msg = register_user(reg_email, reg_pass)
-                        if ok:
-                            st.success(msg)
-                        else:
-                            st.error(msg)
     st.stop()
 
 # --- INICIALIZACIÓN DE ESTADOS DE SESIÓN ---
@@ -443,6 +447,18 @@ st.sidebar.markdown(f"<p style='font-family:\"JetBrains Mono\"; font-size:0.75re
 if st.sidebar.button("🚪 CERRAR SESIÓN", key="btn_logout", use_container_width=True):
     st.session_state.authenticated = False
     st.session_state.user_email = ""
+    st.query_params.clear()
+    components.html(
+        """
+        <script>
+            localStorage.removeItem('gex_active_user');
+            const url = new URL(window.location.href);
+            url.searchParams.delete('session_user');
+            window.location.href = url.origin + url.pathname;
+        </script>
+        """,
+        height=0,
+    )
     st.rerun()
 
 st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
