@@ -45,7 +45,7 @@ except Exception as e:
     st.error(f"Error al conectar con la API de Schwab: {e}")
     st.stop()
 
-# --- ESTILOS CSS FINTECH INSTITUCIONAL (NEÓN & GLASSMORPHISM REFINADO) ---
+# --- ESTILOS CSS FINTECH INSTITUCIONAL ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
@@ -91,7 +91,7 @@ st.markdown("""
         box-shadow: 0 0 10px rgba(59, 130, 246, 0.6) !important;
     }
 
-    [data-testid="stSidebar"] .stButton > button {
+    [data-testid="stSidebar"] .stButton > button, div.stButton > button {
         width: 100%;
         background: linear-gradient(135deg, #1E2640 0%, #0F172A 100%) !important;
         border: 1px solid rgba(59, 130, 246, 0.4) !important;
@@ -104,14 +104,14 @@ st.markdown("""
         padding: 10px 16px !important;
         transition: all 0.2s ease-in-out !important;
     }
-    [data-testid="stSidebar"] .stButton > button:hover {
+    [data-testid="stSidebar"] .stButton > button:hover, div.stButton > button:hover {
         border-color: #60A5FA !important;
         background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%) !important;
         color: #FFFFFF !important;
         box-shadow: 0 0 14px rgba(37, 99, 235, 0.5) !important;
     }
 
-    /* TARJETAS DE MÉTRICAS TOP (ESTILO QUANT DASHBOARD) */
+    /* TARJETAS DE MÉTRICAS TOP */
     .metric-card {
         background: rgba(13, 17, 26, 0.85);
         backdrop-filter: blur(12px);
@@ -198,6 +198,14 @@ st.markdown("""
         background: linear-gradient(180deg, rgba(14, 18, 27, 0.8) 0%, rgba(9, 12, 18, 0.95) 100%);
         box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     }
+    
+    .backtest-controls {
+        background: rgba(14, 19, 31, 0.9);
+        border: 1px solid rgba(59, 130, 246, 0.2);
+        border-radius: 10px;
+        padding: 14px 18px;
+        margin-bottom: 15px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -214,29 +222,6 @@ st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_
 
 tz_choice = st.sidebar.selectbox("TIMEZONE", ["UTC-5 (Lima)", "UTC-4 (New York)"])
 tz_target = "America/Lima" if "UTC-5" in tz_choice else "America/New_York"
-
-st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
-
-# --- NAVEGACIÓN TEMPORAL (TIMEFRAME & BOTONES BACK / NEXT) ---
-st.sidebar.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.75rem; font-weight:700; color:#8B949E; letter-spacing:1px; margin-bottom:6px;'>⏱️ NAVEGACIÓN TEMPORAL</p>", unsafe_allow_html=True)
-
-tf_minutes = st.sidebar.selectbox("TIMEFRAME (MINUTOS)", [1, 5, 15, 30, 60], index=0)
-
-if "time_shift" not in st.session_state:
-    st.session_state.time_shift = 0
-
-col_nav1, col_nav2, col_nav3 = st.sidebar.columns(3)
-with col_nav1:
-    if st.button("◀ Back", use_container_width=True):
-        st.session_state.time_shift -= tf_minutes
-with col_nav2:
-    if st.button("LIVE 🔴", use_container_width=True):
-        st.session_state.time_shift = 0
-with col_nav3:
-    if st.button("Next ▶", use_container_width=True):
-        st.session_state.time_shift += tf_minutes
-        if st.session_state.time_shift > 0:
-            st.session_state.time_shift = 0
 
 st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
 
@@ -507,7 +492,7 @@ else:
     iv_str = "20.00%"
     iv_rank_str = "N/A"
 
-# --- PANEL DE MÉTRICAS TOP TIPO INSTITUCIONAL ---
+# --- PANEL DE MÉTRICAS TOP ---
 cw_diff = ((cw1 - spot_price) / spot_price * 100) if spot_price > 0 else 0
 pw_diff = ((pw1 - spot_price) / spot_price * 100) if spot_price > 0 else 0
 zg_diff = ((zero_gamma - spot_price) / spot_price * 100) if spot_price > 0 else 0
@@ -554,16 +539,17 @@ if JSONBIN_BIN_ID and JSONBIN_API_KEY:
 min_strike = int(np.floor(spot_price - strike_range))
 max_strike = int(np.ceil(spot_price + strike_range))
 
-# --- PESTAÑAS PRINCIPALES ---
-tab_gex, tab_live, tab_data, tab_greeks, tab_3d = st.tabs([
+# --- PESTAÑAS PRINCIPALES (CON NUEVA PESTAÑA BACKGAMMA) ---
+tab_gex, tab_live, tab_back, tab_data, tab_greeks, tab_3d = st.tabs([
     "GEX INFO",
     "LIVE GAMMA",
+    "BACKGAMMA",
     "DATA",
     "GREEKS",
     "SURFACE 3D"
 ])
 
-# --- 1. GEX INFO (CON ENCUADRE ALEJADO 2X DE FORMA PREDETERMINADA) ---
+# --- 1. GEX INFO ---
 with tab_gex:
     sub_gex1, sub_gex2 = st.tabs(["NET GEX PROFILE", "CALLS vs PUTS"])
     
@@ -572,7 +558,6 @@ with tab_gex:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
             colors = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub['net_gex']]
             
-            # Cálculo del rango equivalente a 1 clic de Zoom Out (2x amplitud)
             x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
             x_mid = (x_min_raw + x_max_raw) / 2.0
             x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
@@ -756,37 +741,20 @@ if not df_curr.empty and len(full_timestamps) > 0:
     if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
         Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
 
-# --- RECORTE/DESPLAZAMIENTO SEGÚN NAVEGACIÓN (BACK / NEXT) ---
-total_len = len(full_timestamps)
-if total_len > 0:
-    shift_idx = st.session_state.time_shift
-    target_len = max(1, min(total_len, total_len + shift_idx))
-    
-    display_timestamps = full_timestamps[:target_len]
-    display_h_1m = h_1m_reindexed.iloc[:target_len] if not h_1m_reindexed.empty else pd.DataFrame()
-    display_Z_matrix = Z_matrix_real[:, :target_len] if Z_matrix_real.shape[1] > 0 else Z_matrix_real
-else:
-    display_timestamps = full_timestamps
-    display_h_1m = h_1m_reindexed
-    display_Z_matrix = Z_matrix_real
-
-# --- 2. LIVE GAMMA ---
+# --- 2. LIVE GAMMA (TIEMPO REAL PURO) ---
 with tab_live:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown(f"<h3 style='margin-top:0; font-weight:700; color:#F0F6FC; font-size:1.1rem;'>🌊 Profundidad de Gamma Dinámica ({tz_choice})</h3>", unsafe_allow_html=True)
+    st.markdown(f"<h3 style='margin-top:0; font-weight:700; color:#F0F6FC; font-size:1.1rem;'>🌊 Real-Time Gamma Flow ({tz_choice})</h3>", unsafe_allow_html=True)
 
-    if st.session_state.time_shift < 0 and len(display_timestamps) > 0:
-        st.info(f"⏳ **MODO HISTÓRICO REBOBINADO**: Viendo gráfico hasta las **{display_timestamps[-1]}** (Desplazamiento: **{st.session_state.time_shift} min**). Presiona **LIVE 🔴** en la barra lateral para volver al tiempo real.")
+    if len(full_timestamps) > 0 and Z_matrix_real.shape[1] > 0:
+        custom_hover_matrix = [[fmt_val(val) for val in row] for row in Z_matrix_real]
+        max_real_abs = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
+        Z_matrix_scaled = Z_matrix_real / max_real_abs
 
-    if len(display_timestamps) > 0 and display_Z_matrix.shape[1] > 0:
-        custom_hover_matrix = [[fmt_val(val) for val in row] for row in display_Z_matrix]
-        max_real_abs = float(np.max(np.abs(display_Z_matrix))) if np.max(np.abs(display_Z_matrix)) > 0 else 1.0
-        Z_matrix_scaled = display_Z_matrix / max_real_abs
+        fig_live = go.Figure()
 
-        fig4 = go.Figure()
-
-        fig4.add_trace(go.Heatmap(
-            x=display_timestamps,
+        fig_live.add_trace(go.Heatmap(
+            x=full_timestamps,
             y=fine_strikes,
             z=Z_matrix_scaled,
             customdata=custom_hover_matrix,
@@ -821,23 +789,23 @@ with tab_live:
 
         for k_val, items in grouped_levels.items():
             for label, color, dash in items:
-                fig4.add_hline(y=k_val, line_color=color, line_width=0.8, line_dash=dash, layer="above")
+                fig_live.add_hline(y=k_val, line_color=color, line_width=0.8, line_dash=dash, layer="above")
             labels_str = " / ".join([item[0] for item in items])
             badge_text = f"<b>{labels_str}</b> (${k_val:.0f})"
             main_color = items[0][1]
-            fig4.add_annotation(
+            fig_live.add_annotation(
                 x=0.988, xref="paper", y=k_val, yref="y", text=badge_text, showarrow=False,
                 xanchor="right", yanchor="middle", font=dict(family="JetBrains Mono", size=10, color=main_color),
                 bgcolor="#090D16", bordercolor=main_color, borderwidth=1, borderpad=3, opacity=0.95
             )
 
-        if not display_h_1m.empty:
-            fig4.add_trace(go.Candlestick(
-                x=display_timestamps,
-                open=display_h_1m['Open'],
-                high=display_h_1m['High'],
-                low=display_h_1m['Low'],
-                close=display_h_1m['Close'],
+        if not h_1m_reindexed.empty:
+            fig_live.add_trace(go.Candlestick(
+                x=full_timestamps,
+                open=h_1m_reindexed['Open'],
+                high=h_1m_reindexed['High'],
+                low=h_1m_reindexed['Low'],
+                close=h_1m_reindexed['Close'],
                 name="Spot Price",
                 increasing_line_color='#10B981',
                 decreasing_line_color='#EF4444',
@@ -846,7 +814,7 @@ with tab_live:
                 hovertemplate="<b>Hora:</b> %{x}<br><b>Apertura:</b> $%{open:.2f}<br><b>Máximo:</b> $%{high:.2f}<br><b>Mínimo:</b> $%{low:.2f}<br><b>Cierre:</b> $%{close:.2f}<extra></extra>"
             ))
 
-        fig4.update_layout(
+        fig_live.update_layout(
             template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
             uirevision="static_user_state",
             xaxis_title=f"Hora Intradía ({tz_choice.split(' ')[0]})", yaxis_title="Precio / Strike ($)",
@@ -855,13 +823,140 @@ with tab_live:
             hoverlabel=dict(bgcolor="#161B22", bordercolor="#30363D", font_size=12, font_family="JetBrains Mono", namelength=0)
         )
 
-        st.plotly_chart(fig4, use_container_width=True, config={'scrollZoom': True}, key="heatmap_depth_v7")
+        st.plotly_chart(fig_live, use_container_width=True, config={'scrollZoom': True}, key="heatmap_live")
     else:
-        st.warning("Sin datos intradía disponibles en Schwab para generar el mapa de profundidad.")
+        st.warning("Sin datos intradía disponibles en Schwab para generar el mapa de flujo.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 3. DATA ---
+# --- 3. BACKGAMMA (EXCLUSIVA PARA BACKTEST) ---
+with tab_back:
+    if "backtest_shift" not in st.session_state:
+        st.session_state.backtest_shift = 0
+
+    st.markdown('<div class="backtest-controls">', unsafe_allow_html=True)
+    st.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.80rem; font-weight:800; color:#F0F6FC; letter-spacing:1px; margin-bottom:10px;'>⏮️ REPRODUCCIÓN & BACKTESTING DE GAMMA</p>", unsafe_allow_html=True)
+    
+    col_bt1, col_bt2, col_bt3 = st.columns([2, 1, 1])
+    with col_bt1:
+        bt_tf = st.selectbox("INTERVALO DE SALTO (MINUTOS)", [1, 5, 15, 30, 60], index=0, key="bt_tf_select")
+    with col_bt2:
+        st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+        if st.button("◀ Back", use_container_width=True, key="bt_back_btn"):
+            st.session_state.backtest_shift -= bt_tf
+    with col_bt3:
+        st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+        if st.button("Next ▶", use_container_width=True, key="bt_next_btn"):
+            st.session_state.backtest_shift += bt_tf
+            if st.session_state.backtest_shift > 0:
+                st.session_state.backtest_shift = 0
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # RECORTE DE DATOS PARA BACKTEST
+    total_len = len(full_timestamps)
+    if total_len > 0:
+        shift_idx = st.session_state.backtest_shift
+        target_len = max(1, min(total_len, total_len + shift_idx))
+        
+        bt_timestamps = full_timestamps[:target_len]
+        bt_h_1m = h_1m_reindexed.iloc[:target_len] if not h_1m_reindexed.empty else pd.DataFrame()
+        bt_Z_matrix = Z_matrix_real[:, :target_len] if Z_matrix_real.shape[1] > 0 else Z_matrix_real
+    else:
+        bt_timestamps = full_timestamps
+        bt_h_1m = h_1m_reindexed
+        bt_Z_matrix = Z_matrix_real
+
+    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
+    
+    if len(bt_timestamps) > 0:
+        current_bt_time = bt_timestamps[-1]
+        st.markdown(f"<p style='font-family:\"JetBrains Mono\"; color:#60A5FA; font-size:0.85rem; font-weight:700;'>⏱️ ESTADO DE BACKTEST | Hora Simulada: <span style='color:#F0F6FC;'>{current_bt_time}</span> (Desplazamiento: {st.session_state.backtest_shift} min)</p>", unsafe_allow_html=True)
+
+    if len(bt_timestamps) > 0 and bt_Z_matrix.shape[1] > 0:
+        custom_hover_matrix = [[fmt_val(val) for val in row] for row in bt_Z_matrix]
+        max_real_abs = float(np.max(np.abs(bt_Z_matrix))) if np.max(np.abs(bt_Z_matrix)) > 0 else 1.0
+        Z_matrix_scaled = bt_Z_matrix / max_real_abs
+
+        fig_back = go.Figure()
+
+        fig_back.add_trace(go.Heatmap(
+            x=bt_timestamps,
+            y=fine_strikes,
+            z=Z_matrix_scaled,
+            customdata=custom_hover_matrix,
+            hovertemplate="<b>Hora:</b> %{x}<br><b>Strike:</b> $%{y:.2f}<br><b>Net Gamma Real:</b> %{customdata}<extra></extra>",
+            zsmooth='best', zmin=-1.0, zmax=1.0, zmid=0,
+            colorscale=[
+                [0.0, 'rgba(239, 68, 68, 0.9)'],
+                [0.4, 'rgba(239, 68, 68, 0.15)'],
+                [0.48, 'rgba(6, 8, 13, 0.0)'],
+                [0.52, 'rgba(6, 8, 13, 0.0)'],
+                [0.6, 'rgba(16, 185, 129, 0.15)'],
+                [1.0, 'rgba(16, 185, 129, 0.9)']
+            ],
+            colorbar=dict(title=dict(text="Net GEX ($)", side="top"), x=-0.05),
+            hoverlabel=dict(namelength=0)
+        ))
+
+        raw_levels = []
+        if min_strike <= cw1 <= max_strike: raw_levels.append(('Call Wall 1', cw1, '#10B981', 'solid'))
+        if min_strike <= cw2 <= max_strike: raw_levels.append(('Call Wall 2', cw2, '#10B981', 'dash'))
+        if min_strike <= cw3 <= max_strike: raw_levels.append(('Call Wall 3', cw3, '#10B981', 'dot'))
+        if min_strike <= pw1 <= max_strike: raw_levels.append(('Put Wall 1', pw1, '#EF4444', 'solid'))
+        if min_strike <= pw2 <= max_strike: raw_levels.append(('Put Wall 2', pw2, '#EF4444', 'dash'))
+        if min_strike <= pw3 <= max_strike: raw_levels.append(('Put Wall 3', pw3, '#EF4444', 'dot'))
+        if min_strike <= zero_gamma <= max_strike: raw_levels.append(('Flip Level', zero_gamma, '#3B82F6', 'dot'))
+
+        grouped_levels = {}
+        for label, val, color, dash in raw_levels:
+            key = round(val, 1)
+            if key not in grouped_levels: grouped_levels[key] = []
+            grouped_levels[key].append((label, color, dash))
+
+        for k_val, items in grouped_levels.items():
+            for label, color, dash in items:
+                fig_back.add_hline(y=k_val, line_color=color, line_width=0.8, line_dash=dash, layer="above")
+            labels_str = " / ".join([item[0] for item in items])
+            badge_text = f"<b>{labels_str}</b> (${k_val:.0f})"
+            main_color = items[0][1]
+            fig_back.add_annotation(
+                x=0.988, xref="paper", y=k_val, yref="y", text=badge_text, showarrow=False,
+                xanchor="right", yanchor="middle", font=dict(family="JetBrains Mono", size=10, color=main_color),
+                bgcolor="#090D16", bordercolor=main_color, borderwidth=1, borderpad=3, opacity=0.95
+            )
+
+        if not bt_h_1m.empty:
+            fig_back.add_trace(go.Candlestick(
+                x=bt_timestamps,
+                open=bt_h_1m['Open'],
+                high=bt_h_1m['High'],
+                low=bt_h_1m['Low'],
+                close=bt_h_1m['Close'],
+                name="Spot Price",
+                increasing_line_color='#10B981',
+                decreasing_line_color='#EF4444',
+                increasing_fillcolor='#10B981',
+                decreasing_fillcolor='#EF4444',
+                hovertemplate="<b>Hora:</b> %{x}<br><b>Apertura:</b> $%{open:.2f}<br><b>Máximo:</b> $%{high:.2f}<br><b>Mínimo:</b> $%{low:.2f}<br><b>Cierre:</b> $%{close:.2f}<extra></extra>"
+            ))
+
+        fig_back.update_layout(
+            template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+            uirevision="static_user_state",
+            xaxis_title=f"Hora Intradía Rebobinada ({tz_choice.split(' ')[0]})", yaxis_title="Precio / Strike ($)",
+            height=680, dragmode='pan', hovermode="closest", xaxis_rangeslider_visible=False,
+            margin=dict(l=80, r=60, t=40, b=40), yaxis=dict(dtick=1, side='right'),
+            hoverlabel=dict(bgcolor="#161B22", bordercolor="#30363D", font_size=12, font_family="JetBrains Mono", namelength=0)
+        )
+
+        st.plotly_chart(fig_back, use_container_width=True, config={'scrollZoom': True}, key="heatmap_backtest")
+    else:
+        st.warning("Sin datos intradía disponibles para ejecutar la simulación de backtesting.")
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- 4. DATA ---
 with tab_data:
     sub_dt1, sub_dt2 = st.tabs(["TODAY'S DATA", "DATA GRID"])
     
@@ -887,7 +982,7 @@ with tab_data:
                 height=600
             )
 
-# --- 4. GREEKS ---
+# --- 5. GREEKS ---
 with tab_greeks:
     sub_dex, sub_tex, sub_vex, sub_rex = st.tabs([
         "DELTA EXPOSURE (DEX)",
@@ -996,15 +1091,15 @@ with tab_greeks:
             )
             st.plotly_chart(fig_rex, use_container_width=True)
 
-# --- 5. SURFACE 3D ---
+# --- 6. SURFACE 3D ---
 with tab_3d:
-    if display_Z_matrix.shape[1] > 1:
-        max_abs_gex = float(np.max(np.abs(display_Z_matrix))) if np.max(np.abs(display_Z_matrix)) > 0 else 1.0
+    if Z_matrix_real.shape[1] > 1:
+        max_abs_gex = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
 
-        Z_surface_display = np.sign(display_Z_matrix) * (np.abs(display_Z_matrix / max_abs_gex) ** 0.45) * max_abs_gex
+        Z_surface_display = np.sign(Z_matrix_real) * (np.abs(Z_matrix_real / max_abs_gex) ** 0.45) * max_abs_gex
 
         fig3 = go.Figure(data=[go.Surface(
-            x=display_timestamps,
+            x=full_timestamps,
             y=fine_strikes,
             z=Z_surface_display,
             cmin=-max_abs_gex,
