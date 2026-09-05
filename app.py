@@ -186,7 +186,6 @@ def fetch_option_chain_schwab(symbol, strikes_count):
 
 @st.cache_data(ttl=15)
 def fetch_nq_price_schwab():
-    """Obtiene el precio en tiempo real del futuro /NQ desde Schwab."""
     try:
         resp = client.get_quote("/NQ")
         if resp.status_code == 200:
@@ -214,12 +213,11 @@ if spot_price <= 0 or np.isnan(spot_price):
     st.error(f"Error al obtener el precio de mercado para {ticker_symbol}. Revisa el símbolo o tu conexión con Schwab.")
     st.stop()
 
-# Cálculo del Ratio NQ/QQQ sincronizado
 nq_price = fetch_nq_price_schwab()
 if nq_price > 0 and spot_price > 0:
     conversion_ratio = nq_price / spot_price
 else:
-    conversion_ratio = 41.125  # Fallback a ratio estándar si /NQ no está disponible
+    conversion_ratio = 41.125
 
 st.sidebar.markdown("---")
 st.sidebar.markdown(f"**NQ/QQQ Ratio:** `{conversion_ratio:.4f}`")
@@ -320,7 +318,7 @@ if not df_curr.empty:
         ) / (spot_price * atm_iv * np.sqrt(T_exp)), axis=1
     )
     
-    # Exposición Gamma (GEX)
+    # Exposición Gamma (GEX NETO DOMINANTE)
     df_curr['call_gex'] = df_curr['gamma'] * df_curr['openInterest_c'] * (spot_price ** 2) * 0.01
     df_curr['put_gex'] = df_curr['gamma'] * df_curr['openInterest_p'] * (spot_price ** 2) * (-0.01)
     df_curr['net_gex'] = df_curr['call_gex'] + df_curr['put_gex']
@@ -330,16 +328,16 @@ if not df_curr.empty:
     df_curr['put_dex'] = df_curr['delta_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
     df_curr['net_dex'] = df_curr['call_dex'] + df_curr['put_dex']
 
-    # Exposición Theta (TEX $ Decay / día)
+    # Exposición Theta & Vega
     df_curr['call_tex'] = df_curr['theta_c'] * df_curr['openInterest_c'] * 100
     df_curr['put_tex'] = df_curr['theta_p'] * df_curr['openInterest_p'] * 100
     df_curr['net_tex'] = df_curr['call_tex'] + df_curr['put_tex']
 
-    # Exposición Vega (VEX $ / 1% IV)
     df_curr['call_vex'] = df_curr['vega_c'] * df_curr['openInterest_c'] * 100
     df_curr['put_vex'] = df_curr['vega_p'] * df_curr['openInterest_p'] * 100
     df_curr['net_vex'] = df_curr['call_vex'] + df_curr['put_vex']
 
+    # SELECCIÓN DE WALLS NETAS DOMINANTES
     calls_dominant = df_curr[df_curr['net_gex'] > 0].sort_values('net_gex', ascending=False)
     top_calls = calls_dominant['strike'].tolist()
     cw1 = top_calls[0] if len(top_calls) > 0 else spot_price
@@ -566,10 +564,13 @@ with tab3:
     if Z_matrix_real.shape[1] > 1:
         max_abs_gex = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
 
+        # Compresión de elevación Z en 3D para que niveles de 300k tengan relieve visible
+        Z_surface_display = np.sign(Z_matrix_real) * (np.abs(Z_matrix_real / max_abs_gex) ** 0.45) * max_abs_gex
+
         fig3 = go.Figure(data=[go.Surface(
             x=full_timestamps,
             y=fine_strikes,
-            z=Z_matrix_real,
+            z=Z_surface_display,
             cmin=-max_abs_gex,
             cmax=max_abs_gex,
             colorscale=[
@@ -603,7 +604,7 @@ with tab3:
             scene=dict(
                 xaxis_title='Hora',
                 yaxis_title='Strike ($)',
-                zaxis_title='Net GEX ($)',
+                zaxis_title='Net GEX Amplificado ($)',
                 aspectratio=dict(x=1.6, y=1.2, z=0.6),
                 camera=dict(
                     eye=dict(x=1.6, y=-1.6, z=1.0)
@@ -635,7 +636,9 @@ with tab4:
         custom_hover_matrix = [[fmt_val(val) for val in row] for row in Z_matrix_real]
         
         max_real_abs = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
-        Z_matrix_scaled = np.sign(Z_matrix_real) * (np.abs(Z_matrix_real / max_real_abs) ** 1.7)
+        
+        # AJUSTE DE RELIEVE VISUAL: Raíz 0.45 para resaltar niveles secundarios como $300k vs $40k
+        Z_matrix_scaled = np.sign(Z_matrix_real) * (np.abs(Z_matrix_real / max_real_abs) ** 0.45)
 
         fig4 = go.Figure()
 
