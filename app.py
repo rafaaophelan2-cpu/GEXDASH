@@ -1386,3 +1386,15 @@ with tab_3d:
 if auto_refresh:
     time.sleep(refresh_interval)
     st.rerun()
+from groq import Groq
+import streamlit as st
+
+# Reemplaza con la variable donde guardas tu clave de Groq
+client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+
+try:
+    models = client.models.list()
+    model_ids = [m.id for m in models.data]
+    st.write("Modelos disponibles en mi cuenta:", model_ids)
+except Exception as e:
+    st.error(f"Error: {e}")
