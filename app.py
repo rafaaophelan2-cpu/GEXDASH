@@ -208,22 +208,25 @@ if "user_email" not in st.session_state:
     st.session_state.user_email = ""
 
 def login_user(username_in, password_in):
+    user_clean = username_in.strip().lower()
+    pass_clean = password_in.strip()
+    
     if supabase:
         try:
-            pass_hash = hashlib.sha256(password_in.encode('utf-8')).hexdigest()
+            pass_hash = hashlib.sha256(pass_clean.encode('utf-8')).hexdigest()
             res = supabase.table("app_users") \
                 .select("*") \
-                .eq("username", username_in) \
+                .eq("username", user_clean) \
                 .eq("password_hash", pass_hash) \
                 .execute()
                 
             if res.data and len(res.data) > 0:
                 st.session_state.authenticated = True
-                st.session_state.user_email = username_in
+                st.session_state.user_email = res.data[0].get('username', user_clean)
                 
                 try:
                     supabase.table("active_sessions").upsert({
-                        "username": username_in,
+                        "username": user_clean,
                         "ip_address": "streamlit_cloud",
                         "session_token": st.session_state.get("session_id", "active"),
                         "last_seen": datetime.now().isoformat()
@@ -231,15 +234,18 @@ def login_user(username_in, password_in):
                 except Exception as e_sess:
                     log_to_console("Active Sessions Upsert Error", e_sess)
                     
-                return True, f"Bienvenido {res.data[0].get('name', username_in)}"
+                return True, f"Bienvenido {res.data[0].get('name', user_clean)}"
         except Exception as e:
             log_to_console("Supabase Login Error", e)
 
+    # Fallback a Secrets (Modo Respaldo)
     valid_users = st.secrets.get("USERS", {})
-    if isinstance(valid_users, dict) and username_in in valid_users and valid_users[username_in] == password_in:
-        st.session_state.authenticated = True
-        st.session_state.user_email = username_in
-        return True, "Inicio de sesión exitoso (Modo Respaldo)."
+    if isinstance(valid_users, dict):
+        users_lower = {str(k).strip().lower(): str(v).strip() for k, v in valid_users.items()}
+        if user_clean in users_lower and users_lower[user_clean] == pass_clean:
+            st.session_state.authenticated = True
+            st.session_state.user_email = user_clean
+            return True, "Inicio de sesión exitoso (Modo Respaldo)."
 
     return False, "Usuario o contraseña incorrectos."
 
