@@ -2,6 +2,7 @@ import os
 import json
 import time
 import requests
+import hashlib
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -234,16 +235,10 @@ if not st.session_state.authenticated:
             height=0,
         )
 
-import hashlib
-
 def login_user(username_in, password_in):
-    # 1. Intento de validación contra Supabase (Tabla app_users)
     if supabase:
         try:
-            # Hash SHA-256 de la contraseña ingresada en el formulario
             pass_hash = hashlib.sha256(password_in.encode('utf-8')).hexdigest()
-            
-            # Consulta a la tabla app_users haciendo match con username y password_hash
             res = supabase.table("app_users") \
                 .select("*") \
                 .eq("username", username_in) \
@@ -254,7 +249,6 @@ def login_user(username_in, password_in):
                 st.session_state.authenticated = True
                 st.session_state.user_email = username_in
                 
-                # Registro opcional de sesión activa en Supabase
                 try:
                     supabase.table("active_sessions").upsert({
                         "username": username_in,
@@ -269,7 +263,6 @@ def login_user(username_in, password_in):
         except Exception as e:
             log_to_console("Supabase Login Error", e)
 
-    # 2. Respaldo contra secrets.toml (Streamlit Secrets)
     valid_users = st.secrets.get("USERS", {})
     if isinstance(valid_users, dict) and username_in in valid_users and valid_users[username_in] == password_in:
         st.session_state.authenticated = True
@@ -291,7 +284,7 @@ if not st.session_state.authenticated:
         """, unsafe_allow_html=True)
         
         with st.form("login_form"):
-            email_in = st.text_input("Correo electrónico / Usuario", value="")
+            email_in = st.text_input("Usuario", value="")
             pass_in = st.text_input("Contraseña", type="password", value="")
             remember_me = st.checkbox("No cerrar sesión")
             btn_login = st.form_submit_button("INGRESAR AL TERMINAL", use_container_width=True)
