@@ -85,7 +85,7 @@ def query_groq(system_prompt, user_prompt, api_key):
         from groq import Groq
         groq_client = Groq(api_key=api_key)
         completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="qwen/qwen3.8-27b",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -99,7 +99,7 @@ def query_groq(system_prompt, user_prompt, api_key):
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "llama-3.3-70b-versatile",
+            "model": "qwen/qwen3.8-27b",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -1386,15 +1386,3 @@ with tab_3d:
 if auto_refresh:
     time.sleep(refresh_interval)
     st.rerun()
-from groq import Groq
-import streamlit as st
-
-# Reemplaza con la variable donde guardas tu clave de Groq
-client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-
-try:
-    models = client.models.list()
-    model_ids = [m.id for m in models.data]
-    st.write("Modelos disponibles en mi cuenta:", model_ids)
-except Exception as e:
-    st.error(f"Error: {e}")
