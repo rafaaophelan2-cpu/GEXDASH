@@ -4,7 +4,6 @@ import time
 import requests
 import hashlib
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
@@ -19,13 +18,13 @@ from supabase import create_client, Client
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="GEX Terminal Pro - Schwab", layout="wide", initial_sidebar_state="expanded")
 
-# --- MANEJO SEGURO DE SECRETOS ---
-CLIENT_ID = st.secrets.get("CLIENT_ID", "QJJS3fGYgzh425rtmmGHbPNL5r3ShCHr0FYxerrPzDbAnGxw")
-CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "GQwRhMGJpbHOMB3ANarKzGIgWfxwYUpwN8mvUpyQGpRwd6Jds7gFMnlwiu9THPkj")
-JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "6a9b6fb2da38895dfe3ab4fc")
-JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "$2a$10$SJzpaPLR88mtOlFsqg3g5OHxzYrwkkS9QJRYTUIGXnhxyW6bi0nyO")
-GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", st.secrets.get("GROQ_KEY", st.secrets.get("groq_api_key", os.environ.get("GROQ_API_KEY", None))))
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", None)
+# --- MANEJO SEGURO DE SECRETOS (SIN CREDENCIALES HARDCODEADAS) ---
+CLIENT_ID = st.secrets.get("CLIENT_ID", "")
+CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "")
+JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "")
+JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "")
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", st.secrets.get("GROQ_KEY", os.environ.get("GROQ_API_KEY", "")))
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", ""))
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", ""))
@@ -199,41 +198,14 @@ st.markdown("""
         padding: 14px 18px;
         margin-bottom: 15px;
     }
-
-    .auth-card {
-        background: #0E131F;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 12px;
-        padding: 24px;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    }
     </style>
 """, unsafe_allow_html=True)
 
-# --- MÓDULO DE AUTENTICACIÓN Y PERSISTENCIA ---
+# --- MÓDULO DE AUTENTICACIÓN SEGURA ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "user_email" not in st.session_state:
     st.session_state.user_email = ""
-
-if not st.session_state.authenticated:
-    if "session_user" in st.query_params:
-        st.session_state.authenticated = True
-        st.session_state.user_email = st.query_params["session_user"]
-    else:
-        components.html(
-            """
-            <script>
-                const savedUser = localStorage.getItem('gex_active_user');
-                if (savedUser && !window.location.search.includes('session_user')) {
-                    const url = new URL(window.location.href);
-                    url.searchParams.set('session_user', savedUser);
-                    window.location.href = url.toString();
-                }
-            </script>
-            """,
-            height=0,
-        )
 
 def login_user(username_in, password_in):
     if supabase:
@@ -286,7 +258,6 @@ if not st.session_state.authenticated:
         with st.form("login_form"):
             email_in = st.text_input("Usuario", value="")
             pass_in = st.text_input("Contraseña", type="password", value="")
-            remember_me = st.checkbox("No cerrar sesión")
             btn_login = st.form_submit_button("INGRESAR AL TERMINAL", use_container_width=True)
             
             if btn_login:
@@ -295,8 +266,6 @@ if not st.session_state.authenticated:
                 else:
                     ok, msg = login_user(email_in, pass_in)
                     if ok:
-                        if remember_me:
-                            st.query_params["session_user"] = email_in
                         st.success(msg)
                         st.rerun()
                     else:
@@ -453,18 +422,6 @@ st.sidebar.markdown(f"<p style='font-family:\"JetBrains Mono\"; font-size:0.75re
 if st.sidebar.button("🚪 CERRAR SESIÓN", key="btn_logout", use_container_width=True):
     st.session_state.authenticated = False
     st.session_state.user_email = ""
-    st.query_params.clear()
-    components.html(
-        """
-        <script>
-            localStorage.removeItem('gex_active_user');
-            const url = new URL(window.location.href);
-            url.searchParams.delete('session_user');
-            window.location.href = url.origin + url.pathname;
-        </script>
-        """,
-        height=0,
-    )
     st.rerun()
 
 st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
@@ -871,49 +828,59 @@ k8.markdown(f'<div class="metric-card"><div class="metric-label">Zero Gamma</div
 
 st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-# --- EXPORTACIÓN A NUBE ---
-if supabase:
-    try:
-        snapshot_payload = {
-            "symbol": ticker_symbol,
-            "spot_price": float(spot_price),
-            "conversion_ratio": float(conversion_ratio),
-            "net_gex": float(net_gex_total),
-            "total_gex": float(total_gex),
-            "regime": regime_str,
-            "cw1": float(cw1), "cw2": float(cw2), "cw3": float(cw3),
-            "pw1": float(pw1), "pw2": float(pw2), "pw3": float(pw3),
-            "zero_gamma": float(zero_gamma)
-        }
-        supabase.table("gex_snapshots").insert(snapshot_payload).execute()
-    except Exception as e:
-        log_to_console("Supabase Snapshot Export Error", e)
+# --- EXPORTACIÓN CONTROLADA A LA NUBE (CONTROL DE RE-RUNS) ---
+def export_snapshot_throttled():
+    last_export = st.session_state.get("last_export_time", 0)
+    current_time = time.time()
+    
+    # Solo exportar como máximo una vez cada 300 segundos (5 minutos)
+    if current_time - last_export > 300 and spot_price > 0:
+        st.session_state.last_export_time = current_time
+        
+        if supabase:
+            try:
+                snapshot_payload = {
+                    "symbol": ticker_symbol,
+                    "spot_price": float(spot_price),
+                    "conversion_ratio": float(conversion_ratio),
+                    "net_gex": float(net_gex_total),
+                    "total_gex": float(total_gex),
+                    "regime": regime_str,
+                    "cw1": float(cw1), "cw2": float(cw2), "cw3": float(cw3),
+                    "pw1": float(pw1), "pw2": float(pw2), "pw3": float(pw3),
+                    "zero_gamma": float(zero_gamma)
+                }
+                supabase.table("gex_snapshots").insert(snapshot_payload).execute()
+            except Exception as e:
+                log_to_console("Supabase Snapshot Export Error", e)
 
-if JSONBIN_BIN_ID and JSONBIN_API_KEY:
-    try:
-        url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
-        headers = {
-            'Content-Type': 'application/json',
-            'X-Master-Key': JSONBIN_API_KEY
-        }
-        export_payload = {
-            "qqq_spot": float(spot_price),
-            "conversion_ratio": float(conversion_ratio),
-            "metrics": {
-                "net_gex": net_gex_total,
-                "net_gex_regime": regime_str,
-                "total_gex": total_gex,
-                "gamma_condition": condition_str,
-                "iv_atm": iv_str,
-                "iv_rank": iv_rank_str
-            },
-            "cw1": float(cw1), "cw2": float(cw2), "cw3": float(cw3),
-            "pw1": float(pw1), "pw2": float(pw2), "pw3": float(pw3),
-            "levels": df_curr[['strike', 'net_gex']].to_dict(orient='records') if not df_curr.empty else []
-        }
-        requests.put(url, json=export_payload, headers=headers, timeout=5)
-    except Exception as e:
-        log_to_console("JSONBin Export Error", e)
+        if JSONBIN_BIN_ID and JSONBIN_API_KEY:
+            try:
+                url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+                headers = {
+                    'Content-Type': 'application/json',
+                    'X-Master-Key': JSONBIN_API_KEY
+                }
+                export_payload = {
+                    "qqq_spot": float(spot_price),
+                    "conversion_ratio": float(conversion_ratio),
+                    "metrics": {
+                        "net_gex": net_gex_total,
+                        "net_gex_regime": regime_str,
+                        "total_gex": total_gex,
+                        "gamma_condition": condition_str,
+                        "iv_atm": iv_str,
+                        "iv_rank": iv_rank_str
+                    },
+                    "cw1": float(cw1), "cw2": float(cw2), "cw3": float(cw3),
+                    "pw1": float(pw1), "pw2": float(pw2), "pw3": float(pw3),
+                    "levels": df_curr[['strike', 'net_gex']].to_dict(orient='records') if not df_curr.empty else []
+                }
+                requests.put(url, json=export_payload, headers=headers, timeout=5)
+            except Exception as e:
+                log_to_console("JSONBin Export Error", e)
+
+export_snapshot_throttled()
 
 min_strike = int(np.floor(spot_price - strike_range)) if spot_price > 0 else 0
 max_strike = int(np.ceil(spot_price + strike_range)) if spot_price > 0 else 100
