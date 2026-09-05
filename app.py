@@ -16,6 +16,22 @@ from google import genai
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="GEX Terminal Pro - Schwab", layout="wide", initial_sidebar_state="expanded")
 
+# --- INICIALIZACIÓN DE ESTADOS (CONSOLA Y CHAT) ---
+if "console_logs" not in st.session_state:
+    st.session_state.console_logs = []
+
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
+
+def log_to_console(source: str, error_detail: str):
+    """Registra internamente los detalles de los errores para la Consola."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    st.session_state.console_logs.append({
+        "time": timestamp,
+        "source": source,
+        "error": str(error_detail)
+    })
+
 # --- MANEJO SEGURO DE SECRETOS Y TOKEN ---
 CLIENT_ID = st.secrets.get("CLIENT_ID", "QJJS3fGYgzh425rtmmGHbPNL5r3ShCHr0FYxerrPzDbAnGxw")
 CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "GQwRhMGJpbHOMB3ANarKzGIgWfxwYUpwN8mvUpyQGpRwd6Jds7gFMnlwiu9THPkj")
@@ -46,7 +62,8 @@ def get_schwab_client():
 try:
     client = get_schwab_client()
 except Exception as e:
-    st.error(f"Error al conectar con la API de Schwab: {e}")
+    log_to_console("Conexión Schwab API", e)
+    st.error("Ocurrió un error, revisa la consola")
     st.stop()
 
 # --- CLIENTES DE IA (GROQ Y GEMINI) ---
@@ -55,7 +72,8 @@ def get_gemini_client():
     if GEMINI_API_KEY:
         try:
             return genai.Client(api_key=GEMINI_API_KEY)
-        except Exception:
+        except Exception as e:
+            log_to_console("Inicialización Gemini Client", e)
             return None
     return None
 
@@ -254,9 +272,27 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- ENCABEZADO ---
-st.markdown("<h2 style='margin:0; font-weight:800; letter-spacing:-0.5px; background: linear-gradient(90deg, #F0F6FC 0%, #8B949E 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>GEX QUANT TERMINAL</h2>", unsafe_allow_html=True)
-st.markdown("<p style='color:#6E7681; margin:0 0 15px 0; font-size:0.78rem; font-family:\"JetBrains Mono\"; letter-spacing:0.5px;'>SCHWAB REAL-TIME GAMMA EXPOSURE & INTRADAY FLOW</p>", unsafe_allow_html=True)
+# --- ENCABEZADO Y BOTÓN CONSOLA TOP-RIGHT ---
+col_head_title, col_head_console = st.columns([7.5, 2.5])
+
+with col_head_title:
+    st.markdown("<h2 style='margin:0; font-weight:800; letter-spacing:-0.5px; background: linear-gradient(90deg, #F0F6FC 0%, #8B949E 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>GEX QUANT TERMINAL</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#6E7681; margin:0 0 15px 0; font-size:0.78rem; font-family:\"JetBrains Mono\"; letter-spacing:0.5px;'>SCHWAB REAL-TIME GAMMA EXPOSURE & INTRADAY FLOW</p>", unsafe_allow_html=True)
+
+with col_head_console:
+    with st.popover("💻 CONSOLA", use_container_width=True):
+        st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:800; font-size:0.9rem; color:#F59E0B; margin-bottom:8px;'>💻 CONSOLA DE REGISTROS Y ERRORES</p>", unsafe_allow_html=True)
+        if st.button("🗑️ Limpiar Consola", key="btn_clear_console", use_container_width=True):
+            st.session_state.console_logs = []
+            st.rerun()
+        
+        st.markdown("---")
+        if st.session_state.console_logs:
+            for item in reversed(st.session_state.console_logs):
+                st.markdown(f"**[{item['time']}] {item['source']}**")
+                st.code(item['error'], language="python")
+        else:
+            st.info("No hay errores registrados en la consola.")
 
 # --- SIDEBAR CONFIG ---
 st.sidebar.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.85rem; font-weight:800; color:#F0F6FC; letter-spacing:1px; margin-bottom:15px;'>⚙️ CONFIGURACIÓN</p>", unsafe_allow_html=True)
@@ -308,7 +344,7 @@ def fetch_history_schwab(symbol):
                 }, inplace=True)
                 return df
     except Exception as e:
-        st.error(f"Error obteniendo histórico de Schwab: {e}")
+        log_to_console("fetch_history_schwab", e)
     return pd.DataFrame()
 
 @st.cache_data(ttl=15)
@@ -325,7 +361,7 @@ def fetch_option_chain_schwab(symbol, strikes_count):
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
-        st.error(f"Error obteniendo cadena de opciones de Schwab: {e}")
+        log_to_console("fetch_option_chain_schwab", e)
     return {}
 
 @st.cache_data(ttl=15)
@@ -338,8 +374,8 @@ def fetch_nq_price_schwab():
             price = float(quote_data.get("lastPrice", quote_data.get("closePrice", 0.0)))
             if price > 0:
                 return price
-    except Exception:
-        pass
+    except Exception as e:
+        log_to_console("fetch_nq_price_schwab", e)
     return 0.0
 
 # --- PROCESAMIENTO DE DATOS ---
@@ -354,7 +390,8 @@ if (spot_price <= 0 or np.isnan(spot_price)) and not hist_raw.empty and 'Close' 
     spot_price = float(hist_raw['Close'].dropna().iloc[-1])
 
 if spot_price <= 0 or np.isnan(spot_price):
-    st.error(f"Error al obtener el precio de mercado para {ticker_symbol}. Revisa el símbolo o tu conexión con Schwab.")
+    log_to_console("Spot Price Error", f"No se pudo determinar el precio spot para {ticker_symbol}")
+    st.error("Ocurrió un error, revisa la consola")
     st.stop()
 
 nq_price = fetch_nq_price_schwab()
@@ -546,7 +583,7 @@ else:
     iv_str = "20.00%"
     iv_rank_str = "N/A"
 
-# --- ASISTENTE IA GROQ / GEMINI CACHEADO ---
+# --- ASISTENTE IA CON CAPTURA SILENCIOSA DE ERRORES ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def consultar_ia_cache(tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, net_gex_total, regime_str, call_gex_sum, put_gex_sum, total_gex, cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma, iv_str, condition_str):
     system_prompt = f"""
@@ -566,26 +603,25 @@ def consultar_ia_cache(tipo_analisis, mensaje_usuario, ticker_symbol, spot_price
 
     prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado enfocándote en {tipo_analisis}."
 
-    # Intentar primero con Groq
+    # 1. Intentar con Groq
     if GROQ_API_KEY:
         try:
             return query_groq(system_prompt, prompt_final, GROQ_API_KEY)
         except Exception as e_groq:
-            if not ai_client:
-                return f"Error al comunicarse con Groq: {str(e_groq)}"
+            log_to_console("Groq AI Engine", e_groq)
 
-    # Respaldo opcional con Gemini
+    # 2. Respaldo con Gemini
     if ai_client:
         try:
             response = ai_client.models.generate_content(
-                model='gemini-3.6-flash',
+                model='gemini-2.5-flash',
                 contents=f"{system_prompt}\n\nPregunta del usuario: {prompt_final}"
             )
             return response.text
         except Exception as e_gemini:
-            return f"Error al comunicarse con Gemini: {str(e_gemini)}"
+            log_to_console("Gemini AI Engine", e_gemini)
 
-    return "⚠️ Configura 'GROQ_API_KEY' o 'GEMINI_API_KEY' en los Secrets de Streamlit para activar el asistente de IA."
+    return "Ocurrió un error, revisa la consola"
 
 def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
     return consultar_ia_cache(
@@ -595,22 +631,26 @@ def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
     )
 
 # --- WIDGET CHATBOT EN SIDEBAR ---
-if "chat_messages" not in st.session_state:
-    st.session_state.chat_messages = []
-
 st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
 with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
-    st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:800; font-size:0.9rem; color:#60A5FA; margin-bottom:4px;'>🤖 ASISTENTE CUANTITATIVO GROQ</p>", unsafe_allow_html=True)
+    col_ai_head, col_ai_clear = st.columns([7, 3])
+    with col_ai_head:
+        st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:800; font-size:0.85rem; color:#60A5FA; margin-bottom:2px;'>🤖 ASISTENTE CUANTITATIVO</p>", unsafe_allow_html=True)
+    with col_ai_clear:
+        if st.button("🗑️ Limpiar", key="btn_clear_chat", use_container_width=True):
+            st.session_state.chat_messages = []
+            st.rerun()
+
     st.caption("Diagnóstico en vivo del mercado según perfiles GEX")
 
     col_btn1, col_btn2 = st.columns(2)
     if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
-        with st.spinner("Analizando pre-market con Groq..."):
+        with st.spinner("Analizando pre-market..."):
             res = consultar_ia(tipo_analisis="Pre-Market")
             st.session_state.chat_messages.append({"role": "assistant", "content": res})
 
     if col_btn2.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
-        with st.spinner("Analizando flujo intradía con Groq..."):
+        with st.spinner("Analizando flujo intradía..."):
             res = consultar_ia(tipo_analisis="Mercado Intradía")
             st.session_state.chat_messages.append({"role": "assistant", "content": res})
 
@@ -673,7 +713,7 @@ if JSONBIN_BIN_ID and JSONBIN_API_KEY:
         }
         requests.put(url, json=export_payload, headers=headers, timeout=5)
     except Exception as e:
-        st.sidebar.error(f"Error al enviar datos a JSONBin: {e}")
+        log_to_console("JSONBin Export Error", e)
 
 min_strike = int(np.floor(spot_price - strike_range))
 max_strike = int(np.ceil(spot_price + strike_range))
@@ -964,7 +1004,7 @@ with tab_live:
 
         st.plotly_chart(fig_live, use_container_width=True, config={'scrollZoom': True}, key="heatmap_live")
     else:
-        st.warning("Sin datos intradía disponibles en Schwab para generar el mapa de flujo.")
+        st.info("Esperando actualización de datos intradía...")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1160,7 +1200,7 @@ with tab_back:
             )
             st.plotly_chart(fig_bt_profile, use_container_width=True, key="profile_backtest")
     else:
-        st.warning("Sin datos intradía disponibles para ejecutar la simulación de backtesting.")
+        st.info("Sin datos para la simulación.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
