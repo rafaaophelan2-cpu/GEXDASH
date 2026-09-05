@@ -6,3 +6,4 @@ plotly
 schwab-py
 google-genai
 supabase
+groq
