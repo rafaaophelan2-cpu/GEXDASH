@@ -12,33 +12,78 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import schwab
 from google import genai
+from supabase import create_client, Client
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="GEX Terminal Pro - Schwab", layout="wide", initial_sidebar_state="expanded")
 
-# --- INICIALIZACIÓN DE ESTADOS (CONSOLA Y CHAT) ---
-if "console_logs" not in st.session_state:
-    st.session_state.console_logs = []
-
-if "chat_messages" not in st.session_state:
-    st.session_state.chat_messages = []
-
-def log_to_console(source: str, error_detail: str):
-    """Registra internamente los detalles de los errores para la Consola."""
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    st.session_state.console_logs.append({
-        "time": timestamp,
-        "source": source,
-        "error": str(error_detail)
-    })
-
-# --- MANEJO SEGURO DE SECRETOS Y TOKEN ---
+# --- MANEJO SEGURO DE SECRETOS ---
 CLIENT_ID = st.secrets.get("CLIENT_ID", "QJJS3fGYgzh425rtmmGHbPNL5r3ShCHr0FYxerrPzDbAnGxw")
 CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "GQwRhMGJpbHOMB3ANarKzGIgWfxwYUpwN8mvUpyQGpRwd6Jds7gFMnlwiu9THPkj")
 JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "6a9b6fb2da38895dfe3ab4fc")
 JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "$2a$10$SJzpaPLR88mtOlFsqg3g5OHxzYrwkkS9QJRYTUIGXnhxyW6bi0nyO")
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", st.secrets.get("GROQ_KEY", st.secrets.get("groq_api_key", os.environ.get("GROQ_API_KEY", None))))
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", None)
+
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", ""))
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", ""))
+
+# --- INICIALIZACIÓN DE CLIENTE SUPABASE ---
+@st.cache_resource
+def get_supabase_client():
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            return create_client(SUPABASE_URL, SUPABASE_KEY)
+        except Exception:
+            return None
+    return None
+
+supabase: Client = get_supabase_client()
+
+# --- INICIALIZACIÓN DE ESTADOS (CONSOLA Y CHAT CON PERSISTENCIA SUPABASE) ---
+if "console_logs" not in st.session_state:
+    st.session_state.console_logs = []
+
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
+    if supabase:
+        try:
+            res = supabase.table("chat_messages").select("role, content").order("created_at", desc=False).limit(50).execute()
+            if res.data:
+                st.session_state.chat_messages = res.data
+        except Exception:
+            pass
+
+def log_to_console(source: str, error_detail: str):
+    """Registra internamente y en Supabase los detalles de los errores."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    log_entry = {
+        "time": timestamp,
+        "source": source,
+        "error": str(error_detail)
+    }
+    st.session_state.console_logs.append(log_entry)
+    
+    if supabase:
+        try:
+            supabase.table("console_logs").insert({
+                "source": source,
+                "error": str(error_detail)
+            }).execute()
+        except Exception:
+            pass
+
+def save_chat_message(role: str, content: str):
+    """Guarda mensajes del chat en memoria local y en Supabase."""
+    st.session_state.chat_messages.append({"role": role, "content": content})
+    if supabase:
+        try:
+            supabase.table("chat_messages").insert({
+                "role": role,
+                "content": content
+            }).execute()
+        except Exception as e:
+            log_to_console("Supabase Chat Insert Error", e)
 
 TOKEN_PATH = "schwab_token.json"
 
@@ -284,6 +329,11 @@ with col_head_console:
         st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:800; font-size:0.9rem; color:#F59E0B; margin-bottom:8px;'>💻 CONSOLA DE REGISTROS Y ERRORES</p>", unsafe_allow_html=True)
         if st.button("🗑️ Limpiar Consola", key="btn_clear_console", use_container_width=True):
             st.session_state.console_logs = []
+            if supabase:
+                try:
+                    supabase.table("console_logs").delete().neq("id", 0).execute()
+                except Exception:
+                    pass
             st.rerun()
         
         st.markdown("---")
@@ -639,6 +689,11 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
     with col_ai_clear:
         if st.button("🗑️ Limpiar", key="btn_clear_chat", use_container_width=True):
             st.session_state.chat_messages = []
+            if supabase:
+                try:
+                    supabase.table("chat_messages").delete().neq("id", 0).execute()
+                except Exception:
+                    pass
             st.rerun()
 
     st.caption("Diagnóstico en vivo del mercado según perfiles GEX")
@@ -647,12 +702,12 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
     if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
         with st.spinner("Analizando pre-market..."):
             res = consultar_ia(tipo_analisis="Pre-Market")
-            st.session_state.chat_messages.append({"role": "assistant", "content": res})
+            save_chat_message("assistant", res)
 
     if col_btn2.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
         with st.spinner("Analizando flujo intradía..."):
             res = consultar_ia(tipo_analisis="Mercado Intradía")
-            st.session_state.chat_messages.append({"role": "assistant", "content": res})
+            save_chat_message("assistant", res)
 
     st.markdown("---")
 
@@ -661,13 +716,13 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
             st.write(msg["content"])
 
     if chat_input := st.chat_input("Escribe tu pregunta sobre GEX..."):
-        st.session_state.chat_messages.append({"role": "user", "content": chat_input})
+        save_chat_message("user", chat_input)
         with st.chat_message("user"):
             st.write(chat_input)
 
         with st.spinner("Pensando..."):
             respuesta_bot = consultar_ia(mensaje_usuario=chat_input)
-            st.session_state.chat_messages.append({"role": "assistant", "content": respuesta_bot})
+            save_chat_message("assistant", respuesta_bot)
             with st.chat_message("assistant"):
                 st.write(respuesta_bot)
 
@@ -678,7 +733,7 @@ zg_diff = ((zero_gamma - spot_price) / spot_price * 100) if spot_price > 0 else 
 
 k1, k2, k3, k4, k5, k6, k7, k8 = st.columns(8)
 k1.markdown(f'<div class="metric-card"><div class="metric-label">Spot Price</div><div class="metric-value">${spot_price:.2f}</div><div class="metric-sub">{ticker_symbol}</div></div>', unsafe_allow_html=True)
-k2.markdown(f'<div class="metric-card"><div class="metric-label">Net GEX</div><div class="metric-value" style="color:{"#10B981" if net_gex_total >= 0 else "#EF4444"};">{fmt_val(net_gex_total)}</div><div class="metric-sub">Ratio: {abs(call_gex_sum/put_gex_sum):.2f}</div></div>', unsafe_allow_html=True)
+k2.markdown(f'<div class="metric-card"><div class="metric-label">Net GEX</div><div class="metric-value" style="color:{"#10B981" if net_gex_total >= 0 else "#EF4444"};">{fmt_val(net_gex_total)}</div><div class="metric-sub">Ratio: {abs(call_gex_sum/put_gex_sum) if put_gex_sum != 0 else 0:.2f}</div></div>', unsafe_allow_html=True)
 k3.markdown(f'<div class="metric-card"><div class="metric-label">Call GEX</div><div class="metric-value" style="color:#10B981">{fmt_val(call_gex_sum)}</div><div class="metric-sub">{call_oi_sum:,} OI</div></div>', unsafe_allow_html=True)
 k4.markdown(f'<div class="metric-card"><div class="metric-label">Put GEX</div><div class="metric-value" style="color:#EF4444">{fmt_val(put_gex_sum)}</div><div class="metric-sub">{put_oi_sum:,} OI</div></div>', unsafe_allow_html=True)
 k5.markdown(f'<div class="metric-card"><div class="metric-label">Total GEX</div><div class="metric-value" style="color:#3B82F6">{fmt_val(total_gex, show_sign=False)}</div><div class="metric-sub">{total_oi_sum:,} OI</div></div>', unsafe_allow_html=True)
@@ -688,7 +743,24 @@ k8.markdown(f'<div class="metric-card"><div class="metric-label">Zero Gamma</div
 
 st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-# --- EXPORTACIÓN A NUBE (JSONBIN) ---
+# --- EXPORTACIÓN A NUBE (SUPABASE Y JSONBIN) ---
+if supabase:
+    try:
+        snapshot_payload = {
+            "symbol": ticker_symbol,
+            "spot_price": float(spot_price),
+            "conversion_ratio": float(conversion_ratio),
+            "net_gex": float(net_gex_total),
+            "total_gex": float(total_gex),
+            "regime": regime_str,
+            "cw1": float(cw1), "cw2": float(cw2), "cw3": float(cw3),
+            "pw1": float(pw1), "pw2": float(pw2), "pw3": float(pw3),
+            "zero_gamma": float(zero_gamma)
+        }
+        supabase.table("gex_snapshots").insert(snapshot_payload).execute()
+    except Exception as e:
+        log_to_console("Supabase Snapshot Export Error", e)
+
 if JSONBIN_BIN_ID and JSONBIN_API_KEY:
     try:
         url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
