@@ -18,8 +18,8 @@ st.set_page_config(page_title="GEX Terminal Pro - Schwab", layout="wide", initia
 # --- MANEJO SEGURO DE SECRETOS Y TOKEN ---
 CLIENT_ID = st.secrets.get("CLIENT_ID", "QJJS3fGYgzh425rtmmGHbPNL5r3ShCHr0FYxerrPzDbAnGxw")
 CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "GQwRhMGJpbHOMB3ANarKzGIgWfxwYUpwN8mvUpyQGpRwd6Jds7gFMnlwiu9THPkj")
-JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "")
-JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "")
+JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "6a9b6fb2da38895dfe3ab4fc")
+JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "$2a$10$SJzpaPLR88mtOlFsqg3g5OHxzYrwkkS9QJRYTUIGXnhxyW6bi0nyO")
 TOKEN_PATH = "schwab_token.json"
 
 if "SCHWAB_TOKEN" in st.secrets and not os.path.exists(TOKEN_PATH):
