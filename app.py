@@ -539,13 +539,14 @@ if not df_curr.empty and len(full_timestamps) > 0:
     days_to_exp = max((exp_dt - ref_today).days, 0)
     T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
 
-    sigma_k = max(0.8, (max_strike - min_strike) / 35.0)
+    # Ancho reducido a 0.25 para que el color actúe solo como un delineado fino del strike
+    sigma_k = 0.25
 
     for t_idx, S_t in enumerate(full_spots):
         if S_t <= 0 or np.isnan(S_t): continue
         for _, r in df_curr.iterrows():
             K = r['strike']
-            if K < min_strike - 3 or K > max_strike + 3: continue
+            if K < min_strike - 1 or K > max_strike + 1: continue
             net_oi = r['openInterest_c'] - r['openInterest_p']
             if net_oi == 0: continue
 
@@ -557,14 +558,15 @@ if not df_curr.empty and len(full_timestamps) > 0:
             Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
 
     if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
-        Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(1.8, 2.5))
+        # Suavizado mínimo para evitar que se difumine el área oscura entre strikes
+        Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.5, 1.2))
 
 # --- TAB 3: SURFACE 3D ---
 with tab3:
     if Z_matrix_real.shape[1] > 1:
         max_abs_gex = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
 
-        # Compresión de elevación Z en 3D para que niveles de 300k tengan relieve visible
+        # Relieve en 3D para la visualización tridimensional
         Z_surface_display = np.sign(Z_matrix_real) * (np.abs(Z_matrix_real / max_abs_gex) ** 0.45) * max_abs_gex
 
         fig3 = go.Figure(data=[go.Surface(
@@ -637,8 +639,8 @@ with tab4:
         
         max_real_abs = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
         
-        # AJUSTE DE RELIEVE VISUAL: Raíz 0.45 para resaltar niveles secundarios como $300k vs $40k
-        Z_matrix_scaled = np.sign(Z_matrix_real) * (np.abs(Z_matrix_real / max_real_abs) ** 0.45)
+        # Escalado lineal directo sin elevación a potencia para mantener el fondo oscuro
+        Z_matrix_scaled = Z_matrix_real / max_real_abs
 
         fig4 = go.Figure()
 
@@ -648,11 +650,14 @@ with tab4:
             z=Z_matrix_scaled,
             customdata=custom_hover_matrix,
             hovertemplate="<b>Hora:</b> %{x}<br><b>Strike:</b> $%{y:.2f}<br><b>Net Gamma Real:</b> %{customdata}<extra></extra>",
-            zsmooth='best', zmin=-1.0, zmax=1.0, zmid=0,
+            zsmooth=False, zmin=-1.0, zmax=1.0, zmid=0,
             colorscale=[
-                [0.0, 'rgba(255, 23, 68, 0.95)'], [0.35, 'rgba(255, 23, 68, 0.35)'], [0.48, 'rgba(255, 23, 68, 0.05)'],
-                [0.50, 'rgba(14, 18, 23, 0.0)'], [0.52, 'rgba(0, 230, 118, 0.05)'], [0.65, 'rgba(0, 230, 118, 0.35)'],
-                [1.0, 'rgba(0, 230, 118, 0.95)']
+                [0.0, 'rgba(255, 23, 68, 0.9)'],
+                [0.4, 'rgba(255, 23, 68, 0.15)'],
+                [0.48, 'rgba(14, 18, 23, 0.0)'],
+                [0.52, 'rgba(14, 18, 23, 0.0)'],
+                [0.6, 'rgba(0, 230, 118, 0.15)'],
+                [1.0, 'rgba(0, 230, 118, 0.9)']
             ],
             colorbar=dict(title=dict(text="Net GEX ($)", side="top"), x=-0.05),
             hoverlabel=dict(namelength=0)
@@ -709,7 +714,7 @@ with tab4:
             hoverlabel=dict(bgcolor="#161B22", bordercolor="#30363D", font_size=12, font_family="JetBrains Mono", namelength=0)
         )
 
-        st.plotly_chart(fig4, use_container_width=True, config={'scrollZoom': True}, key="heatmap_depth_v4")
+        st.plotly_chart(fig4, use_container_width=True, config={'scrollZoom': True}, key="heatmap_depth_v6")
     else:
         st.warning("Sin datos intradía disponibles en Schwab para generar el mapa de profundidad.")
 
