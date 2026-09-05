@@ -7,3 +7,5 @@ schwab-py
 google-genai
 supabase
 groq
+supabase
+extra-streamlit-components
