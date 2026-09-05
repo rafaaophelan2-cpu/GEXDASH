@@ -215,7 +215,6 @@ if "authenticated" not in st.session_state:
 if "user_email" not in st.session_state:
     st.session_state.user_email = ""
 
-# Auto-login si la opción "No cerrar sesión" está guardada en la URL o localStorage
 if not st.session_state.authenticated:
     if "session_user" in st.query_params:
         st.session_state.authenticated = True
@@ -261,7 +260,7 @@ def login_user(email, password):
 
     return False, "Usuario o contraseña incorrectos."
 
-# --- PANTALLA EXCLUSIVA DE LOGIN (CAMPOS EN BLANCO Y SIN REGISTRO) ---
+# --- PANTALLA EXCLUSIVA DE LOGIN ---
 if not st.session_state.authenticated:
     st.markdown("<div style='height:60px;'></div>", unsafe_allow_html=True)
     col_center = st.columns([1, 1.8, 1])[1]
@@ -287,14 +286,6 @@ if not st.session_state.authenticated:
                     if ok:
                         if remember_me:
                             st.query_params["session_user"] = email_in
-                            components.html(
-                                f"""
-                                <script>
-                                    localStorage.setItem('gex_active_user', '{email_in}');
-                                </script>
-                                """,
-                                height=0,
-                            )
                         st.success(msg)
                         st.rerun()
                     else:
@@ -356,19 +347,23 @@ if "SCHWAB_TOKEN" in st.secrets and not os.path.exists(TOKEN_PATH):
 
 @st.cache_resource
 def get_schwab_client():
-    return schwab.auth.client_from_token_file(
-        token_path=TOKEN_PATH,
-        api_key=CLIENT_ID,
-        app_secret=CLIENT_SECRET,
-        enforce_enums=False
-    )
+    if not os.path.exists(TOKEN_PATH):
+        return None
+    try:
+        return schwab.auth.client_from_token_file(
+            token_path=TOKEN_PATH,
+            api_key=CLIENT_ID,
+            app_secret=CLIENT_SECRET,
+            enforce_enums=False
+        )
+    except Exception as e:
+        log_to_console("Conexión Schwab API Init", e)
+        return None
 
-try:
-    client = get_schwab_client()
-except Exception as e:
-    log_to_console("Conexión Schwab API", e)
-    st.error("Ocurrió un error, revisa la consola")
-    st.stop()
+client = get_schwab_client()
+if client is None:
+    log_to_console("Conexión Schwab API", "Token de acceso no válido o ausente.")
+    st.error("No se pudo establecer la conexión con la API de Schwab. Revisa la consola de registros.")
 
 # --- CLIENTES DE IA (GROQ Y GEMINI) ---
 @st.cache_resource
@@ -473,7 +468,7 @@ tz_target = "America/Lima" if "UTC-5" in tz_choice else "America/New_York"
 
 st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
 
-auto_refresh = st.sidebar.toggle("AUTO-REFRESCO EN VIVO", value=True)
+auto_refresh = st.sidebar.toggle("AUTO-REFRESCO EN VIVO", value=False)
 refresh_interval = st.sidebar.select_slider(
     "INTERVALO (SEGUNDOS)",
     options=[10, 15, 30, 60],
@@ -489,6 +484,8 @@ if st.sidebar.button("🔄 ACTUALIZAR DATOS AHORA", use_container_width=True):
 # --- FUNCIONES DE MERCADO SCHWAB CACHEADAS ---
 @st.cache_data(ttl=15)
 def fetch_history_schwab(symbol):
+    if not client:
+        return pd.DataFrame()
     try:
         today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         resp = client.get_price_history(
@@ -516,6 +513,8 @@ def fetch_history_schwab(symbol):
 
 @st.cache_data(ttl=15)
 def fetch_option_chain_schwab(symbol, strikes_count):
+    if not client:
+        return {}
     try:
         today = datetime.now()
         resp = client.get_option_chain(
@@ -533,6 +532,8 @@ def fetch_option_chain_schwab(symbol, strikes_count):
 
 @st.cache_data(ttl=15)
 def fetch_nq_price_schwab():
+    if not client:
+        return 0.0
     try:
         resp = client.get_quote("/NQ")
         if resp.status_code == 200:
@@ -558,8 +559,6 @@ if (spot_price <= 0 or np.isnan(spot_price)) and not hist_raw.empty and 'Close' 
 
 if spot_price <= 0 or np.isnan(spot_price):
     log_to_console("Spot Price Error", f"No se pudo determinar el precio spot para {ticker_symbol}")
-    st.error("Ocurrió un error, revisa la consola")
-    st.stop()
 
 nq_price = fetch_nq_price_schwab()
 if nq_price > 0 and spot_price > 0:
@@ -578,6 +577,9 @@ st.sidebar.markdown(f"""
 """, unsafe_allow_html=True)
 
 def parse_schwab_chain(chain_data):
+    if not isinstance(chain_data, dict):
+        return pd.DataFrame(), None
+        
     call_map = chain_data.get('callExpDateMap', {})
     put_map = chain_data.get('putExpDateMap', {})
     
@@ -655,7 +657,7 @@ def fmt_val(val, show_sign=True):
     else:
         return f"{sign}${val:.1f}"
 
-# --- FUNCIÓN DE RECALCULO DINÁMICO DE GAMMA POR PRECIO SPOT ---
+# --- RECALCULO DINÁMICO DE GAMMA ---
 def recalculate_gex_for_spot(df_input, spot_t, T_exp, iv):
     if df_input.empty or spot_t <= 0:
         return df_input
@@ -674,8 +676,8 @@ def recalculate_gex_for_spot(df_input, spot_t, T_exp, iv):
     return df_out
 
 # --- CÁLCULOS CUÁNTICOS DE OPCIONES ---
-if not df_curr.empty:
-    exp_date_part = exp_0dte.split(':')[0] if ':' in exp_0dte else exp_0dte
+if not df_curr.empty and exp_0dte is not None:
+    exp_date_part = exp_0dte.split(':')[0] if isinstance(exp_0dte, str) and ':' in exp_0dte else str(exp_0dte)
     exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
     days_to_exp = max((exp_dt - ref_today).days, 0)
     T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
@@ -750,7 +752,7 @@ else:
     iv_str = "20.00%"
     iv_rank_str = "N/A"
 
-# --- ASISTENTE IA CON CAPTURA SILENCIOSA DE ERRORES ---
+# --- ASISTENTE IA ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def consultar_ia_cache(tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, net_gex_total, regime_str, call_gex_sum, put_gex_sum, total_gex, cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma, iv_str, condition_str):
     system_prompt = f"""
@@ -786,7 +788,7 @@ def consultar_ia_cache(tipo_analisis, mensaje_usuario, ticker_symbol, spot_price
         except Exception as e_gemini:
             log_to_console("Gemini AI Engine", e_gemini)
 
-    return "Ocurrió un error, revisa la consola"
+    return "Ocurrió un error al procesar la solicitud de IA."
 
 def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
     return consultar_ia_cache(
@@ -858,7 +860,7 @@ k8.markdown(f'<div class="metric-card"><div class="metric-label">Zero Gamma</div
 
 st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-# --- EXPORTACIÓN A NUBE (SUPABASE Y JSONBIN) ---
+# --- EXPORTACIÓN A NUBE ---
 if supabase:
     try:
         snapshot_payload = {
@@ -902,8 +904,8 @@ if JSONBIN_BIN_ID and JSONBIN_API_KEY:
     except Exception as e:
         log_to_console("JSONBin Export Error", e)
 
-min_strike = int(np.floor(spot_price - strike_range))
-max_strike = int(np.ceil(spot_price + strike_range))
+min_strike = int(np.floor(spot_price - strike_range)) if spot_price > 0 else 0
+max_strike = int(np.ceil(spot_price + strike_range)) if spot_price > 0 else 100
 
 # --- PESTAÑAS PRINCIPALES ---
 tab_gex, tab_live, tab_back, tab_data, tab_greeks, tab_3d = st.tabs([
@@ -1081,8 +1083,8 @@ else:
 fine_strikes = np.linspace(min_strike, max_strike, int((max_strike - min_strike) * 10 + 1))
 Z_matrix_real = np.zeros((len(fine_strikes), len(full_timestamps))) if len(full_timestamps) > 0 else np.zeros((0,0))
 
-if not df_curr.empty and len(full_timestamps) > 0:
-    exp_date_part = exp_0dte.split(':')[0] if ':' in exp_0dte else exp_0dte
+if not df_curr.empty and len(full_timestamps) > 0 and exp_0dte is not None:
+    exp_date_part = exp_0dte.split(':')[0] if isinstance(exp_0dte, str) and ':' in exp_0dte else str(exp_0dte)
     exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
     days_to_exp = max((exp_dt - ref_today).days, 0)
     T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
@@ -1107,7 +1109,7 @@ if not df_curr.empty and len(full_timestamps) > 0:
     if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
         Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
 
-# --- 2. LIVE GAMMA (TIEMPO REAL PURO) ---
+# --- 2. LIVE GAMMA ---
 with tab_live:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
     st.markdown(f"<h3 style='margin-top:0; font-weight:700; color:#F0F6FC; font-size:1.1rem;'>🌊 Real-Time Gamma Flow ({tz_choice})</h3>", unsafe_allow_html=True)
@@ -1195,7 +1197,7 @@ with tab_live:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 3. BACKGAMMA (EXCLUSIVA PARA BACKTEST) ---
+# --- 3. BACKGAMMA ---
 with tab_back:
     if "backtest_shift" not in st.session_state:
         st.session_state.backtest_shift = 0
@@ -1568,8 +1570,3 @@ with tab_3d:
             margin=dict(l=20, r=20, t=50, b=20)
         )
         st.plotly_chart(fig3, use_container_width=True)
-
-# --- BUCLE DE AUTO-REFRESCO AL FINAL ---
-if auto_refresh:
-    time.sleep(refresh_interval)
-    st.rerun()
