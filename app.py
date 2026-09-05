@@ -60,7 +60,6 @@ st.markdown("""
         background-color: #06080D !important;
     }
 
-    /* SIDEBAR REDISEÑADO */
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #090D16 0%, #05070B 100%) !important;
         border-right: 1px solid rgba(255, 255, 255, 0.07) !important;
@@ -111,7 +110,6 @@ st.markdown("""
         box-shadow: 0 0 14px rgba(37, 99, 235, 0.5) !important;
     }
 
-    /* TARJETAS DE MÉTRICAS TOP */
     .metric-card {
         background: rgba(13, 17, 26, 0.85);
         backdrop-filter: blur(12px);
@@ -146,7 +144,6 @@ st.markdown("""
         margin-top: 2px;
     }
     
-    /* RATIO STATUS BADGE */
     .status-card {
         background: rgba(14, 19, 31, 0.9);
         border: 1px solid rgba(255, 255, 255, 0.08);
@@ -166,7 +163,6 @@ st.markdown("""
         margin-right: 6px;
     }
 
-    /* PESTAÑAS (TABS) MODERNAS */
     .stTabs [data-baseweb="tab-list"] {
         gap: 6px;
         background-color: #0B0E17;
@@ -406,7 +402,25 @@ def fmt_val(val, show_sign=True):
     else:
         return f"{sign}${val:.1f}"
 
-# --- CÁLCULOS CUÁNTICOS DE OPCIONES & TODAS LAS GRIEGAS ---
+# --- FUNCIÓN DE RECALCULO DINÁMICO DE GAMMA POR PRECIO SPOT ---
+def recalculate_gex_for_spot(df_input, spot_t, T_exp, iv):
+    if df_input.empty or spot_t <= 0:
+        return df_input
+    
+    df_out = df_input.copy()
+    
+    def calc_gamma_dyn(r):
+        K = r['strike']
+        d1 = (np.log(spot_t / K) + (0.045 + 0.5 * iv**2) * T_exp) / (iv * np.sqrt(T_exp))
+        return norm.pdf(d1) / (spot_t * iv * np.sqrt(T_exp))
+
+    df_out['gamma'] = df_out.apply(calc_gamma_dyn, axis=1)
+    df_out['call_gex'] = df_out['gamma'] * df_out['openInterest_c'] * (spot_t ** 2) * 0.01
+    df_out['put_gex'] = df_out['gamma'] * df_out['openInterest_p'] * (spot_t ** 2) * (-0.01)
+    df_out['net_gex'] = df_out['call_gex'] + df_out['put_gex']
+    return df_out
+
+# --- CÁLCULOS CUÁNTICOS DE OPCIONES ---
 if not df_curr.empty:
     exp_date_part = exp_0dte.split(':')[0] if ':' in exp_0dte else exp_0dte
     exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
@@ -422,16 +436,7 @@ if not df_curr.empty:
     atm_iv = float(np.median(valid_ivs)) if len(valid_ivs) > 0 else 0.20
     atm_iv = max(atm_iv, 0.12)
 
-    df_curr['gamma'] = df_curr.apply(
-        lambda r: r['gamma_c'] if r['gamma_c'] > 0 else norm.pdf(
-            (np.log(spot_price / r['strike']) + (0.045 + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
-        ) / (spot_price * atm_iv * np.sqrt(T_exp)), axis=1
-    )
-    
-    # GEX, DEX, TEX, VEX, REX
-    df_curr['call_gex'] = df_curr['gamma'] * df_curr['openInterest_c'] * (spot_price ** 2) * 0.01
-    df_curr['put_gex'] = df_curr['gamma'] * df_curr['openInterest_p'] * (spot_price ** 2) * (-0.01)
-    df_curr['net_gex'] = df_curr['call_gex'] + df_curr['put_gex']
+    df_curr = recalculate_gex_for_spot(df_curr, spot_price, T_exp, atm_iv)
 
     df_curr['call_dex'] = df_curr['delta_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
     df_curr['put_dex'] = df_curr['delta_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
@@ -952,13 +957,17 @@ with tab_back:
 
         st.plotly_chart(fig_back, use_container_width=True, config={'scrollZoom': True}, key="heatmap_backtest")
 
-        # --- ADICIÓN: STRIKE PROFILE (NET GEX PROFILE) DENTRO DE BACKGAMMA ---
+        # --- PERFIL DINÁMICO DE NET GEX EN TIEMPO DE BACKTEST ---
         if not df_curr.empty:
             st.markdown("<hr style='border-color:rgba(255,255,255,0.08); margin: 25px 0;'>", unsafe_allow_html=True)
             
+            # Obtener el spot simulado en el minuto del backtest
             bt_spot_val = bt_h_1m['Close'].dropna().iloc[-1] if (not bt_h_1m.empty and 'Close' in bt_h_1m and len(bt_h_1m['Close'].dropna()) > 0) else spot_price
 
-            df_sub_bt = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            # Recalcular Gamma y Net GEX dinámicamente para el spot del instante simulado
+            df_curr_bt = recalculate_gex_for_spot(df_curr, bt_spot_val, T_exp, atm_iv)
+
+            df_sub_bt = df_curr_bt[(df_curr_bt['strike'] >= min_strike) & (df_curr_bt['strike'] <= max_strike)].copy()
             colors_bt = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub_bt['net_gex']]
 
             x_min_raw, x_max_raw = df_sub_bt['strike'].min(), df_sub_bt['strike'].max()
@@ -978,7 +987,7 @@ with tab_back:
                 y=df_sub_bt['net_gex'],
                 orientation='v',
                 marker_color=colors_bt,
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net GEX:</b> %{customdata}<extra></extra>",
+                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net GEX Recomputado:</b> %{customdata}<extra></extra>",
                 customdata=[fmt_val(v) for v in df_sub_bt['net_gex']]
             ))
 
@@ -987,7 +996,7 @@ with tab_back:
                 line_color="#3B82F6",
                 line_width=1.5,
                 line_dash="dash",
-                annotation_text="Spot",
+                annotation_text=f"Spot: ${bt_spot_val:.2f}",
                 annotation_position="top",
                 annotation_font=dict(color="#60A5FA", size=11, family="JetBrains Mono")
             )
@@ -997,7 +1006,7 @@ with tab_back:
                 plot_bgcolor='#06080D',
                 paper_bgcolor='#06080D',
                 title=dict(
-                    text="<b>Strike Profile (Net Gamma Exposure) - Backtest Mode</b>",
+                    text=f"<b>Strike Profile Dynamic (Net Gamma Exposure @ ${bt_spot_val:.2f})</b>",
                     font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")
                 ),
                 xaxis=dict(
