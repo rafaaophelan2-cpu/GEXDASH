@@ -41,6 +41,28 @@ def get_supabase_client():
 
 supabase: Client = get_supabase_client()
 
+# --- INICIALIZACIÓN DE ESTADOS Y SISTEMA DE LOGS (DEFINIDO ANTES DE LOGIN) ---
+if "console_logs" not in st.session_state:
+    st.session_state.console_logs = []
+
+def log_to_console(source: str, error_detail: str):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    log_entry = {
+        "time": timestamp,
+        "source": source,
+        "error": str(error_detail)
+    }
+    st.session_state.console_logs.append(log_entry)
+    
+    if supabase:
+        try:
+            supabase.table("console_logs").insert({
+                "source": source,
+                "error": str(error_detail)
+            }).execute()
+        except Exception:
+            pass
+
 # --- ESTILOS CSS FINTECH INSTITUCIONAL ---
 st.markdown("""
     <style>
@@ -273,15 +295,12 @@ if not st.session_state.authenticated:
                     ok, msg = login_user(email_in, pass_in)
                     if ok:
                         st.success(msg)
-                        st.rerun()
+                        st.rerun()  # Transición limpia e inmediata
                     else:
                         st.error(msg)
     st.stop()
 
-# --- INICIALIZACIÓN DE ESTADOS DE SESIÓN ---
-if "console_logs" not in st.session_state:
-    st.session_state.console_logs = []
-
+# --- INICIALIZACIÓN DE HISTORIAL DE CHAT ---
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
     if supabase:
@@ -289,24 +308,6 @@ if "chat_messages" not in st.session_state:
             res = supabase.table("chat_messages").select("role, content").order("created_at", desc=False).limit(50).execute()
             if res.data:
                 st.session_state.chat_messages = res.data
-        except Exception:
-            pass
-
-def log_to_console(source: str, error_detail: str):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    log_entry = {
-        "time": timestamp,
-        "source": source,
-        "error": str(error_detail)
-    }
-    st.session_state.console_logs.append(log_entry)
-    
-    if supabase:
-        try:
-            supabase.table("console_logs").insert({
-                "source": source,
-                "error": str(error_detail)
-            }).execute()
         except Exception:
             pass
 
