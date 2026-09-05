@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import requests
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -17,6 +18,8 @@ st.set_page_config(page_title="GEX Terminal Pro - Schwab", layout="wide", initia
 # --- MANEJO SEGURO DE SECRETOS Y TOKEN ---
 CLIENT_ID = st.secrets.get("CLIENT_ID", "QJJS3fGYgzh425rtmmGHbPNL5r3ShCHr0FYxerrPzDbAnGxw")
 CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "GQwRhMGJpbHOMB3ANarKzGIgWfxwYUpwN8mvUpyQGpRwd6Jds7gFMnlwiu9THPkj")
+JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "")
+JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "")
 TOKEN_PATH = "schwab_token.json"
 
 if "SCHWAB_TOKEN" in st.secrets and not os.path.exists(TOKEN_PATH):
@@ -334,17 +337,21 @@ else:
     zero_gamma = spot_price
     atm_iv = 0.20
 
-# --- EXPORTACIÓN PARA QUANTOWER ---
-try:
-    os.makedirs(r"C:\Temp", exist_ok=True)
-    export_payload = {
-        "qqq_spot": float(spot_price),
-        "levels": df_curr[['strike', 'net_gex']].to_dict(orient='records') if not df_curr.empty else []
-    }
-    with open(r"C:\Temp\gex_qqq.json", "w") as f:
-        json.dump(export_payload, f)
-except Exception as e:
-    st.sidebar.error(f"Error al guardar JSON para Quantower: {e}")
+# --- EXPORTACIÓN PARA QUANTOWER (SINCRONIZACIÓN NUBE VIA JSONBIN) ---
+if JSONBIN_BIN_ID and JSONBIN_API_KEY:
+    try:
+        url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+        headers = {
+            'Content-Type': 'application/json',
+            'X-Master-Key': JSONBIN_API_KEY
+        }
+        export_payload = {
+            "qqq_spot": float(spot_price),
+            "levels": df_curr[['strike', 'net_gex']].to_dict(orient='records') if not df_curr.empty else []
+        }
+        requests.put(url, json=export_payload, headers=headers, timeout=5)
+    except Exception as e:
+        st.sidebar.error(f"Error al enviar datos a JSONBin: {e}")
 
 min_strike = int(np.floor(spot_price - (strike_range * 0.8)))
 max_strike = int(np.ceil(spot_price + (strike_range * 0.8)))
@@ -502,7 +509,6 @@ if not df_curr.empty and len(full_timestamps) > 0:
     days_to_exp = max((exp_dt - ref_today).days, 0)
     T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
 
-    # Ancho de banda dinámico según separación de strikes
     sigma_k = max(0.8, (max_strike - min_strike) / 35.0)
 
     for t_idx, S_t in enumerate(full_spots):
@@ -517,11 +523,9 @@ if not df_curr.empty and len(full_timestamps) > 0:
             gamma_t = norm.pdf(d1_t) / (S_t * atm_iv * np.sqrt(T_exp))
             net_gex_t = net_oi * gamma_t * (S_t ** 2) * 0.01
 
-            # Suavizado gaussiano expandido para unir puntos entre strikes
             gauss_weight = np.exp(-0.5 * ((fine_strikes - K) / sigma_k) ** 2)
             Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
 
-    # Filtrado 2D continuo con SciPy para generar una superficie fluida
     if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
         Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(1.8, 2.5))
 
@@ -537,11 +541,11 @@ with tab3:
             cmin=-max_abs_gex,
             cmax=max_abs_gex,
             colorscale=[
-                [0.0, '#FF1744'],   # Put GEX Negativo (Rojo)
-                [0.35, '#2A1215'],  # Transición suave
-                [0.5, '#0E1117'],   # Z = 0 (Neutro)
-                [0.65, '#122A1E'],  # Transición suave
-                [1.0, '#00E676']    # Call GEX Positivo (Verde)
+                [0.0, '#FF1744'],
+                [0.35, '#2A1215'],
+                [0.5, '#0E1117'],
+                [0.65, '#122A1E'],
+                [1.0, '#00E676']
             ],
             lighting=dict(
                 ambient=0.6,
