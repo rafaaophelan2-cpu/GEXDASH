@@ -528,8 +528,8 @@ if JSONBIN_BIN_ID and JSONBIN_API_KEY:
     except Exception as e:
         st.sidebar.error(f"Error al enviar datos a JSONBin: {e}")
 
-min_strike = int(np.floor(spot_price - (strike_range * 0.8)))
-max_strike = int(np.ceil(spot_price + (strike_range * 0.8)))
+min_strike = int(np.floor(spot_price - strike_range))
+max_strike = int(np.ceil(spot_price + strike_range))
 
 # --- PESTAÑAS PRINCIPALES ---
 tab_gex, tab_live, tab_data, tab_greeks, tab_3d = st.tabs([
@@ -549,6 +549,9 @@ with tab_gex:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
             colors = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub['net_gex']]
             
+            x_min_val = df_sub['strike'].min() - 0.8
+            x_max_val = df_sub['strike'].max() + 0.8
+
             fig1 = go.Figure()
             # BARRAS VERTICALES: x=Strike, y=Net GEX
             fig1.add_trace(go.Bar(
@@ -583,7 +586,8 @@ with tab_gex:
                     title="Strike ($)",
                     gridcolor="rgba(255,255,255,0.05)",
                     tickfont=dict(family="JetBrains Mono", color="#8B949E"),
-                    zeroline=False
+                    zeroline=False,
+                    range=[x_min_val, x_max_val]
                 ),
                 yaxis=dict(
                     title="Net GEX ($)",
@@ -602,6 +606,9 @@ with tab_gex:
         if not df_curr.empty:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
             
+            x_min_val = df_sub['strike'].min() - 0.8
+            x_max_val = df_sub['strike'].max() + 0.8
+
             fig2 = go.Figure()
             fig2.add_trace(go.Bar(
                 x=df_sub['strike'], y=df_sub['call_gex'],
@@ -630,7 +637,12 @@ with tab_gex:
                 template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
                 title=dict(text="<b>Call Gamma vs Put Gamma por Strike</b>", font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")),
                 barmode='relative',
-                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono")),
+                xaxis=dict(
+                    title="Strike ($)",
+                    gridcolor="rgba(255,255,255,0.05)",
+                    tickfont=dict(family="JetBrains Mono"),
+                    range=[x_min_val, x_max_val]
+                ),
                 yaxis=dict(title="Gamma Exposure ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono")),
                 height=560, margin=dict(l=50, r=40, t=50, b=40)
             )
