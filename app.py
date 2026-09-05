@@ -540,7 +540,7 @@ tab_gex, tab_live, tab_data, tab_greeks, tab_3d = st.tabs([
     "SURFACE 3D"
 ])
 
-# --- 1. GEX INFO (REDISEÑADO CON BARRAS VERTICALES) ---
+# --- 1. GEX INFO (CON ENCUADRE ALEJADO 2X DE FORMA PREDETERMINADA) ---
 with tab_gex:
     sub_gex1, sub_gex2 = st.tabs(["NET GEX PROFILE", "CALLS vs PUTS"])
     
@@ -549,11 +549,19 @@ with tab_gex:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
             colors = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub['net_gex']]
             
-            x_min_val = df_sub['strike'].min() - 0.8
-            x_max_val = df_sub['strike'].max() + 0.8
+            # Cálculo del rango equivalente a 1 clic de Zoom Out (2x amplitud)
+            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
+            x_mid = (x_min_raw + x_max_raw) / 2.0
+            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
+            x_min_val = x_mid - (x_half_span * 2.0)
+            x_max_val = x_mid + (x_half_span * 2.0)
+
+            y_max_val = df_sub['net_gex'].max()
+            y_min_val = df_sub['net_gex'].min()
+            y_max_adj = (max(y_max_val, 0) * 1.8) if y_max_val > 0 else 1000
+            y_min_adj = (min(y_min_val, 0) * 1.8) if y_min_val < 0 else -1000
 
             fig1 = go.Figure()
-            # BARRAS VERTICALES: x=Strike, y=Net GEX
             fig1.add_trace(go.Bar(
                 x=df_sub['strike'],
                 y=df_sub['net_gex'],
@@ -563,7 +571,6 @@ with tab_gex:
                 customdata=[fmt_val(v) for v in df_sub['net_gex']]
             ))
             
-            # Línea VERTICAL para el Spot Price con etiqueta superior
             fig1.add_vline(
                 x=spot_price,
                 line_color="#3B82F6",
@@ -595,7 +602,8 @@ with tab_gex:
                     tickfont=dict(family="JetBrains Mono", color="#8B949E"),
                     zeroline=True,
                     zerolinecolor="rgba(255,255,255,0.15)",
-                    zerolinewidth=1
+                    zerolinewidth=1,
+                    range=[y_min_adj, y_max_adj]
                 ),
                 height=560,
                 margin=dict(l=50, r=40, t=50, b=40)
@@ -606,8 +614,16 @@ with tab_gex:
         if not df_curr.empty:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
             
-            x_min_val = df_sub['strike'].min() - 0.8
-            x_max_val = df_sub['strike'].max() + 0.8
+            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
+            x_mid = (x_min_raw + x_max_raw) / 2.0
+            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
+            x_min_val = x_mid - (x_half_span * 2.0)
+            x_max_val = x_mid + (x_half_span * 2.0)
+
+            y_max_val = max(df_sub['call_gex'].max(), 0)
+            y_min_val = min(df_sub['put_gex'].min(), 0)
+            y_max_adj = (y_max_val * 1.8) if y_max_val > 0 else 1000
+            y_min_adj = (y_min_val * 1.8) if y_min_val < 0 else -1000
 
             fig2 = go.Figure()
             fig2.add_trace(go.Bar(
@@ -643,7 +659,12 @@ with tab_gex:
                     tickfont=dict(family="JetBrains Mono"),
                     range=[x_min_val, x_max_val]
                 ),
-                yaxis=dict(title="Gamma Exposure ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono")),
+                yaxis=dict(
+                    title="Gamma Exposure ($)",
+                    gridcolor="rgba(255,255,255,0.05)",
+                    tickfont=dict(family="JetBrains Mono"),
+                    range=[y_min_adj, y_max_adj]
+                ),
                 height=560, margin=dict(l=50, r=40, t=50, b=40)
             )
             st.plotly_chart(fig2, use_container_width=True)
@@ -826,7 +847,7 @@ with tab_data:
                 height=600
             )
 
-# --- 4. GREEKS (CADA GRIEGO EN SU PESTAÑA DEDICADA CON BARRAS VERTICALES) ---
+# --- 4. GREEKS ---
 with tab_greeks:
     sub_dex, sub_tex, sub_vex, sub_rex = st.tabs([
         "DELTA EXPOSURE (DEX)",
@@ -838,6 +859,11 @@ with tab_greeks:
     with sub_dex:
         if not df_curr.empty:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
+            x_mid = (x_min_raw + x_max_raw) / 2.0
+            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
+            x_min_val, x_max_val = x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)
+
             fig_dex = go.Figure()
             fig_dex.add_trace(go.Bar(
                 x=df_sub['strike'], y=df_sub['net_dex'],
@@ -849,7 +875,7 @@ with tab_greeks:
             fig_dex.update_layout(
                 template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
                 title="Delta Exposure Total (DEX) por Strike ($ Millones)",
-                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)"),
+                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
                 yaxis=dict(title="DEX ($ Millones)", gridcolor="rgba(255,255,255,0.05)"),
                 height=560, margin=dict(l=50, r=40, t=50, b=40)
             )
@@ -858,6 +884,11 @@ with tab_greeks:
     with sub_tex:
         if not df_curr.empty:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
+            x_mid = (x_min_raw + x_max_raw) / 2.0
+            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
+            x_min_val, x_max_val = x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)
+
             fig_tex = go.Figure()
             fig_tex.add_trace(go.Bar(
                 x=df_sub['strike'], y=df_sub['net_tex'],
@@ -869,7 +900,7 @@ with tab_greeks:
             fig_tex.update_layout(
                 template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
                 title="Theta Exposure Total (TEX - Pérdida por Decaimiento Temporal $/día)",
-                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)"),
+                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
                 yaxis=dict(title="TEX ($/día)", gridcolor="rgba(255,255,255,0.05)"),
                 height=560, margin=dict(l=50, r=40, t=50, b=40)
             )
@@ -878,6 +909,11 @@ with tab_greeks:
     with sub_vex:
         if not df_curr.empty:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
+            x_mid = (x_min_raw + x_max_raw) / 2.0
+            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
+            x_min_val, x_max_val = x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)
+
             fig_vex = go.Figure()
             fig_vex.add_trace(go.Bar(
                 x=df_sub['strike'], y=df_sub['net_vex'],
@@ -889,7 +925,7 @@ with tab_greeks:
             fig_vex.update_layout(
                 template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
                 title="Vega Exposure Total (VEX - Sensibilidad $/1% Cambio en IV)",
-                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)"),
+                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
                 yaxis=dict(title="VEX ($/1% IV)", gridcolor="rgba(255,255,255,0.05)"),
                 height=560, margin=dict(l=50, r=40, t=50, b=40)
             )
@@ -898,6 +934,11 @@ with tab_greeks:
     with sub_rex:
         if not df_curr.empty:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
+            x_mid = (x_min_raw + x_max_raw) / 2.0
+            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
+            x_min_val, x_max_val = x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)
+
             fig_rex = go.Figure()
             fig_rex.add_trace(go.Bar(
                 x=df_sub['strike'], y=df_sub['net_rex'],
@@ -909,7 +950,7 @@ with tab_greeks:
             fig_rex.update_layout(
                 template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
                 title="Rho Exposure Total (REX - Sensibilidad $/1% Cambio en Tasa)",
-                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)"),
+                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
                 yaxis=dict(title="REX ($/1% Tasa)", gridcolor="rgba(255,255,255,0.05)"),
                 height=560, margin=dict(l=50, r=40, t=50, b=40)
             )
