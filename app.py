@@ -334,6 +334,18 @@ else:
     zero_gamma = spot_price
     atm_iv = 0.20
 
+# --- EXPORTACIÓN PARA QUANTOWER ---
+try:
+    os.makedirs(r"C:\Temp", exist_ok=True)
+    export_payload = {
+        "qqq_spot": float(spot_price),
+        "levels": df_curr[['strike', 'net_gex']].to_dict(orient='records') if not df_curr.empty else []
+    }
+    with open(r"C:\Temp\gex_qqq.json", "w") as f:
+        json.dump(export_payload, f)
+except Exception as e:
+    st.sidebar.error(f"Error al guardar JSON para Quantower: {e}")
+
 min_strike = int(np.floor(spot_price - (strike_range * 0.8)))
 max_strike = int(np.ceil(spot_price + (strike_range * 0.8)))
 
@@ -509,7 +521,7 @@ if not df_curr.empty and len(full_timestamps) > 0:
             gauss_weight = np.exp(-0.5 * ((fine_strikes - K) / sigma_k) ** 2)
             Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
 
-    # Filtrado 2D continuo con SciPy para generar una superficie fluida (estilo Foto 2)
+    # Filtrado 2D continuo con SciPy para generar una superficie fluida
     if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
         Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(1.8, 2.5))
 
