@@ -184,6 +184,21 @@ def fetch_option_chain_schwab(symbol, strikes_count):
         st.error(f"Error obteniendo cadena de opciones de Schwab: {e}")
     return {}
 
+@st.cache_data(ttl=15)
+def fetch_nq_price_schwab():
+    """Obtiene el precio en tiempo real del futuro /NQ desde Schwab."""
+    try:
+        resp = client.get_quote("/NQ")
+        if resp.status_code == 200:
+            data = resp.json()
+            quote_data = data.get("/NQ", {}).get("quote", {})
+            price = float(quote_data.get("lastPrice", quote_data.get("closePrice", 0.0)))
+            if price > 0:
+                return price
+    except Exception:
+        pass
+    return 0.0
+
 # --- PROCESAMIENTO DE DATOS ---
 now_tz = pd.Timestamp.now(tz=tz_target)
 ref_today = now_tz.floor('D').tz_localize(None)
@@ -198,6 +213,16 @@ if (spot_price <= 0 or np.isnan(spot_price)) and not hist_raw.empty and 'Close' 
 if spot_price <= 0 or np.isnan(spot_price):
     st.error(f"Error al obtener el precio de mercado para {ticker_symbol}. Revisa el símbolo o tu conexión con Schwab.")
     st.stop()
+
+# Cálculo del Ratio NQ/QQQ sincronizado
+nq_price = fetch_nq_price_schwab()
+if nq_price > 0 and spot_price > 0:
+    conversion_ratio = nq_price / spot_price
+else:
+    conversion_ratio = 41.125  # Fallback a ratio estándar si /NQ no está disponible
+
+st.sidebar.markdown("---")
+st.sidebar.markdown(f"**NQ/QQQ Ratio:** `{conversion_ratio:.4f}`")
 
 def parse_schwab_chain(chain_data):
     call_map = chain_data.get('callExpDateMap', {})
@@ -347,6 +372,13 @@ if JSONBIN_BIN_ID and JSONBIN_API_KEY:
         }
         export_payload = {
             "qqq_spot": float(spot_price),
+            "conversion_ratio": float(conversion_ratio),
+            "cw1": float(cw1),
+            "cw2": float(cw2),
+            "cw3": float(cw3),
+            "pw1": float(pw1),
+            "pw2": float(pw2),
+            "pw3": float(pw3),
             "levels": df_curr[['strike', 'net_gex']].to_dict(orient='records') if not df_curr.empty else []
         }
         requests.put(url, json=export_payload, headers=headers, timeout=5)
