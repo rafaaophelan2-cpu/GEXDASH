@@ -14,13 +14,6 @@ from datetime import datetime, timedelta
 import schwab
 from google import genai
 from supabase import create_client, Client
-import datetime
-import hashlib
-import streamlit as st
-
-# Definición de función auxiliar de log
-def log_to_console(title, err):
-    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {title}: {err}")
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="GEX Terminal Pro - Schwab", layout="wide", initial_sidebar_state="expanded")
