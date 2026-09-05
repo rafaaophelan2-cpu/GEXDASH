@@ -40,123 +40,6 @@ def get_supabase_client():
 
 supabase: Client = get_supabase_client()
 
-# --- INICIALIZACIÓN DE ESTADOS (CONSOLA Y CHAT CON PERSISTENCIA SUPABASE) ---
-if "console_logs" not in st.session_state:
-    st.session_state.console_logs = []
-
-if "chat_messages" not in st.session_state:
-    st.session_state.chat_messages = []
-    if supabase:
-        try:
-            res = supabase.table("chat_messages").select("role, content").order("created_at", desc=False).limit(50).execute()
-            if res.data:
-                st.session_state.chat_messages = res.data
-        except Exception:
-            pass
-
-def log_to_console(source: str, error_detail: str):
-    """Registra internamente y en Supabase los detalles de los errores."""
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    log_entry = {
-        "time": timestamp,
-        "source": source,
-        "error": str(error_detail)
-    }
-    st.session_state.console_logs.append(log_entry)
-    
-    if supabase:
-        try:
-            supabase.table("console_logs").insert({
-                "source": source,
-                "error": str(error_detail)
-            }).execute()
-        except Exception:
-            pass
-
-def save_chat_message(role: str, content: str):
-    """Guarda mensajes del chat en memoria local y en Supabase."""
-    st.session_state.chat_messages.append({"role": role, "content": content})
-    if supabase:
-        try:
-            supabase.table("chat_messages").insert({
-                "role": role,
-                "content": content
-            }).execute()
-        except Exception as e:
-            log_to_console("Supabase Chat Insert Error", e)
-
-TOKEN_PATH = "schwab_token.json"
-
-if "SCHWAB_TOKEN" in st.secrets and not os.path.exists(TOKEN_PATH):
-    raw_token = st.secrets["SCHWAB_TOKEN"]
-    with open(TOKEN_PATH, "w") as f:
-        if isinstance(raw_token, str):
-            f.write(raw_token)
-        else:
-            json.dump(dict(raw_token), f)
-
-@st.cache_resource
-def get_schwab_client():
-    return schwab.auth.client_from_token_file(
-        token_path=TOKEN_PATH,
-        api_key=CLIENT_ID,
-        app_secret=CLIENT_SECRET,
-        enforce_enums=False
-    )
-
-try:
-    client = get_schwab_client()
-except Exception as e:
-    log_to_console("Conexión Schwab API", e)
-    st.error("Ocurrió un error, revisa la consola")
-    st.stop()
-
-# --- CLIENTES DE IA (GROQ Y GEMINI) ---
-@st.cache_resource
-def get_gemini_client():
-    if GEMINI_API_KEY:
-        try:
-            return genai.Client(api_key=GEMINI_API_KEY)
-        except Exception as e:
-            log_to_console("Inicialización Gemini Client", e)
-            return None
-    return None
-
-ai_client = get_gemini_client()
-
-def query_groq(system_prompt, user_prompt, api_key):
-    """Ejecuta consulta a Groq vía SDK si está disponible o mediante API REST directa."""
-    try:
-        from groq import Groq
-        groq_client = Groq(api_key=api_key)
-        completion = groq_client.chat.completions.create(
-            model="qwen/qwen3.8-27b",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.3
-        )
-        return completion.choices[0].message.content
-    except ImportError:
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "qwen/qwen3.8-27b",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.3
-        }
-        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
-        if resp.status_code == 200:
-            return resp.json()["choices"][0]["message"]["content"]
-        else:
-            raise Exception(f"Groq API Error {resp.status_code}: {resp.text}")
-
 # --- ESTILOS CSS FINTECH INSTITUCIONAL ---
 st.markdown("""
     <style>
@@ -314,8 +197,219 @@ st.markdown("""
         padding: 14px 18px;
         margin-bottom: 15px;
     }
+
+    .auth-card {
+        background: #0E131F;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 24px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
     </style>
 """, unsafe_allow_html=True)
+
+# --- MÓDULO DE AUTENTICACIÓN ---
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "user_email" not in st.session_state:
+    st.session_state.user_email = ""
+
+def login_user(email, password):
+    if supabase:
+        try:
+            res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+            if res.user:
+                st.session_state.authenticated = True
+                st.session_state.user_email = email
+                return True, "Inicio de sesión exitoso."
+        except Exception:
+            try:
+                res = supabase.table("users").select("*").eq("email", email).eq("password", password).execute()
+                if res.data:
+                    st.session_state.authenticated = True
+                    st.session_state.user_email = email
+                    return True, "Inicio de sesión exitoso."
+            except Exception:
+                pass
+
+    valid_users = st.secrets.get("USERS", {"admin@gex.com": "admin123", "trader@gex.com": "gex2026"})
+    if isinstance(valid_users, dict) and email in valid_users and valid_users[email] == password:
+        st.session_state.authenticated = True
+        st.session_state.user_email = email
+        return True, "Inicio de sesión exitoso."
+
+    return False, "Usuario o contraseña incorrectos."
+
+def register_user(email, password):
+    if supabase:
+        try:
+            res = supabase.auth.sign_up({"email": email, "password": password})
+            if res.user:
+                return True, "Registro exitoso en Supabase Auth. Ya puedes iniciar sesión."
+        except Exception:
+            try:
+                supabase.table("users").insert({"email": email, "password": password}).execute()
+                return True, "Registro exitoso en la base de datos."
+            except Exception as e:
+                return False, f"Error en registro: {e}"
+    return False, "El registro requiere conexión activa con Supabase."
+
+# --- PANTALLA DE LOGIN / REGISTRO ---
+if not st.session_state.authenticated:
+    st.markdown("<div style='height:60px;'></div>", unsafe_allow_html=True)
+    col_center = st.columns([1, 1.8, 1])[1]
+    with col_center:
+        st.markdown("""
+            <div style='text-align:center; margin-bottom: 20px;'>
+                <h2 style='font-weight:800; letter-spacing:-0.5px; background: linear-gradient(90deg, #F0F6FC 0%, #8B949E 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>GEX QUANT TERMINAL</h2>
+                <p style='color:#6E7681; font-family:"JetBrains Mono"; font-size:0.8rem;'>SISTEMA DE AUTENTICACIÓN INSTITUCIONAL</p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        tab_log, tab_reg = st.tabs(["🔑 Iniciar Sesión", "📝 Registrarse"])
+        
+        with tab_log:
+            with st.form("login_form"):
+                email_in = st.text_input("Correo electrónico / Usuario", value="admin@gex.com")
+                pass_in = st.text_input("Contraseña", type="password", value="admin123")
+                btn_login = st.form_submit_button("INGRESAR AL TERMINAL", use_container_width=True)
+                if btn_login:
+                    ok, msg = login_user(email_in, pass_in)
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+        with tab_reg:
+            with st.form("register_form"):
+                reg_email = st.text_input("Correo electrónico")
+                reg_pass = st.text_input("Contraseña", type="password")
+                btn_reg = st.form_submit_button("CREAR CUENTA", use_container_width=True)
+                if btn_reg:
+                    if not reg_email or not reg_pass:
+                        st.warning("Completa todos los campos.")
+                    else:
+                        ok, msg = register_user(reg_email, reg_pass)
+                        if ok:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
+    st.stop()
+
+# --- INICIALIZACIÓN DE ESTADOS DE SESIÓN ---
+if "console_logs" not in st.session_state:
+    st.session_state.console_logs = []
+
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
+    if supabase:
+        try:
+            res = supabase.table("chat_messages").select("role, content").order("created_at", desc=False).limit(50).execute()
+            if res.data:
+                st.session_state.chat_messages = res.data
+        except Exception:
+            pass
+
+def log_to_console(source: str, error_detail: str):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    log_entry = {
+        "time": timestamp,
+        "source": source,
+        "error": str(error_detail)
+    }
+    st.session_state.console_logs.append(log_entry)
+    
+    if supabase:
+        try:
+            supabase.table("console_logs").insert({
+                "source": source,
+                "error": str(error_detail)
+            }).execute()
+        except Exception:
+            pass
+
+def save_chat_message(role: str, content: str):
+    st.session_state.chat_messages.append({"role": role, "content": content})
+    if supabase:
+        try:
+            supabase.table("chat_messages").insert({
+                "role": role,
+                "content": content
+            }).execute()
+        except Exception as e:
+            log_to_console("Supabase Chat Insert Error", e)
+
+TOKEN_PATH = "schwab_token.json"
+
+if "SCHWAB_TOKEN" in st.secrets and not os.path.exists(TOKEN_PATH):
+    raw_token = st.secrets["SCHWAB_TOKEN"]
+    with open(TOKEN_PATH, "w") as f:
+        if isinstance(raw_token, str):
+            f.write(raw_token)
+        else:
+            json.dump(dict(raw_token), f)
+
+@st.cache_resource
+def get_schwab_client():
+    return schwab.auth.client_from_token_file(
+        token_path=TOKEN_PATH,
+        api_key=CLIENT_ID,
+        app_secret=CLIENT_SECRET,
+        enforce_enums=False
+    )
+
+try:
+    client = get_schwab_client()
+except Exception as e:
+    log_to_console("Conexión Schwab API", e)
+    st.error("Ocurrió un error, revisa la consola")
+    st.stop()
+
+# --- CLIENTES DE IA (GROQ Y GEMINI) ---
+@st.cache_resource
+def get_gemini_client():
+    if GEMINI_API_KEY:
+        try:
+            return genai.Client(api_key=GEMINI_API_KEY)
+        except Exception as e:
+            log_to_console("Inicialización Gemini Client", e)
+            return None
+    return None
+
+ai_client = get_gemini_client()
+
+def query_groq(system_prompt, user_prompt, api_key):
+    try:
+        from groq import Groq
+        groq_client = Groq(api_key=api_key)
+        completion = groq_client.chat.completions.create(
+            model="qwen/qwen3.8-27b",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3
+        )
+        return completion.choices[0].message.content
+    except ImportError:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "qwen/qwen3.8-27b",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.3
+        }
+        resp = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=15)
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"]
+        else:
+            raise Exception(f"Groq API Error {resp.status_code}: {resp.text}")
 
 # --- ENCABEZADO Y BOTÓN CONSOLA TOP-RIGHT ---
 col_head_title, col_head_console = st.columns([7.5, 2.5])
@@ -344,7 +438,14 @@ with col_head_console:
         else:
             st.info("No hay errores registrados en la consola.")
 
-# --- SIDEBAR CONFIG ---
+# --- SIDEBAR CONFIG Y SESIÓN ---
+st.sidebar.markdown(f"<p style='font-family:\"JetBrains Mono\"; font-size:0.75rem; color:#60A5FA; margin-bottom:8px;'>👤 USUARIO: <b>{st.session_state.user_email}</b></p>", unsafe_allow_html=True)
+if st.sidebar.button("🚪 CERRAR SESIÓN", key="btn_logout", use_container_width=True):
+    st.session_state.authenticated = False
+    st.session_state.user_email = ""
+    st.rerun()
+
+st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
 st.sidebar.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.85rem; font-weight:800; color:#F0F6FC; letter-spacing:1px; margin-bottom:15px;'>⚙️ CONFIGURACIÓN</p>", unsafe_allow_html=True)
 
 ticker_symbol = st.sidebar.text_input("SYMBOL", value="QQQ").upper()
@@ -653,14 +754,12 @@ def consultar_ia_cache(tipo_analisis, mensaje_usuario, ticker_symbol, spot_price
 
     prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado enfocándote en {tipo_analisis}."
 
-    # 1. Intentar con Groq
     if GROQ_API_KEY:
         try:
             return query_groq(system_prompt, prompt_final, GROQ_API_KEY)
         except Exception as e_groq:
             log_to_console("Groq AI Engine", e_groq)
 
-    # 2. Respaldo con Gemini
     if ai_client:
         try:
             response = ai_client.models.generate_content(
