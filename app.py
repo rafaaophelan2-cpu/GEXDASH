@@ -344,7 +344,6 @@ def login_user(username_in, password_in):
                 user_record = res.data[0]
                 db_hash = str(user_record.get('password_hash', '')).strip()
                 
-                # Permite validación por hash SHA256 o texto plano por retrocompatibilidad
                 if db_hash == pass_hash or db_hash == pass_clean:
                     st.session_state.authenticated = True
                     st.session_state.user_email = user_record.get('username', user_clean)
@@ -709,6 +708,7 @@ def parse_schwab_chain(chain_data):
                 'delta_c': 0.0, 'delta_p': 0.0,
                 'theta_c': 0.0, 'theta_p': 0.0,
                 'vega_c': 0.0, 'vega_p': 0.0,
+                'vanna_c': 0.0, 'vanna_p': 0.0,
                 'iv_c': 0.0, 'iv_p': 0.0
             }
         records[strike]['openInterest_c'] = opt.get('openInterest', 0)
@@ -730,6 +730,7 @@ def parse_schwab_chain(chain_data):
                 'delta_c': 0.0, 'delta_p': 0.0,
                 'theta_c': 0.0, 'theta_p': 0.0,
                 'vega_c': 0.0, 'vega_p': 0.0,
+                'vanna_c': 0.0, 'vanna_p': 0.0,
                 'iv_c': 0.0, 'iv_p': 0.0
             }
         records[strike]['openInterest_p'] = opt.get('openInterest', 0)
@@ -764,7 +765,7 @@ if not is_online:
                 if col not in df_curr.columns: df_curr[col] = 1000
             for col in ['iv_c', 'iv_p']:
                 if col not in df_curr.columns: df_curr[col] = 0.20
-            for col in ['delta_c', 'delta_p', 'theta_c', 'theta_p', 'vega_c', 'vega_p']:
+            for col in ['delta_c', 'delta_p', 'theta_c', 'theta_p', 'vega_c', 'vega_p', 'vanna_c', 'vanna_p']:
                 if col not in df_curr.columns: df_curr[col] = 0.0
             exp_0dte = now_tz.strftime('%Y-%m-%d')
     elif jsonbin_history_data:
@@ -784,7 +785,7 @@ if not is_online:
                         if col not in df_curr.columns: df_curr[col] = 1000
                     for col in ['iv_c', 'iv_p']:
                         if col not in df_curr.columns: df_curr[col] = 0.20
-                    for col in ['delta_c', 'delta_p', 'theta_c', 'theta_p', 'vega_c', 'vega_p']:
+                    for col in ['delta_c', 'delta_p', 'theta_c', 'theta_p', 'vega_c', 'vega_p', 'vanna_c', 'vanna_p']:
                         if col not in df_curr.columns: df_curr[col] = 0.0
                     exp_0dte = latest_date_key
 
@@ -929,6 +930,8 @@ if df_curr.empty:
             'theta_p': -0.08,
             'vega_c': 0.15,
             'vega_p': 0.15,
+            'vanna_c': 0.02,
+            'vanna_p': 0.02,
             'iv_c': iv,
             'iv_p': iv
         })
@@ -1056,25 +1059,29 @@ if not df_curr.empty and exp_0dte is not None and spot_price > 0:
 
     df_curr = recalculate_gex_for_spot(df_curr, spot_price, T_exp, atm_iv)
 
+    # Delta Exposure (DEX)
     df_curr['call_dex'] = df_curr['delta_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
     df_curr['put_dex'] = df_curr['delta_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
     df_curr['net_dex'] = df_curr['call_dex'] + df_curr['put_dex']
 
+    # Theta Exposure (TEX)
     df_curr['call_tex'] = df_curr['theta_c'] * df_curr['openInterest_c'] * 100
     df_curr['put_tex'] = df_curr['theta_p'] * df_curr['openInterest_p'] * 100
     df_curr['net_tex'] = df_curr['call_tex'] + df_curr['put_tex']
 
+    # Vega Exposure (VEX)
     df_curr['call_vex'] = df_curr['vega_c'] * df_curr['openInterest_c'] * 100
     df_curr['put_vex'] = df_curr['vega_p'] * df_curr['openInterest_p'] * 100
     df_curr['net_vex'] = df_curr['call_vex'] + df_curr['put_vex']
 
+    # Charm Exposure (CHEX) & Vanna Exposure (VANNA EX)
     r_rate = 0.045
     valid_strikes = df_curr['strike'] > 0
-    d1_charm = (np.log(spot_price / df_curr.loc[valid_strikes, 'strike']) + (r_rate + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
-    d2_charm = d1_charm - atm_iv * np.sqrt(T_exp)
+    d1_calc = (np.log(spot_price / df_curr.loc[valid_strikes, 'strike']) + (r_rate + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
+    d2_calc = d1_calc - atm_iv * np.sqrt(T_exp)
     
-    call_charm_annual = - norm.pdf(d1_charm) * (r_rate / (atm_iv * np.sqrt(T_exp)) - d2_charm / (2.0 * T_exp))
-    put_charm_annual = call_charm_annual + (r_rate * np.exp(-r_rate * T_exp) * norm.cdf(-d1_charm))
+    call_charm_annual = - norm.pdf(d1_calc) * (r_rate / (atm_iv * np.sqrt(T_exp)) - d2_calc / (2.0 * T_exp))
+    put_charm_annual = call_charm_annual + (r_rate * np.exp(-r_rate * T_exp) * norm.cdf(-d1_calc))
 
     df_curr.loc[valid_strikes, 'charm_c'] = call_charm_annual / 365.0
     df_curr.loc[valid_strikes, 'charm_p'] = put_charm_annual / 365.0
@@ -1084,6 +1091,17 @@ if not df_curr.empty and exp_0dte is not None and spot_price > 0:
     df_curr['call_chex'] = df_curr['charm_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
     df_curr['put_chex'] = df_curr['charm_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
     df_curr['net_chex'] = df_curr['call_chex'] - df_curr['put_chex']
+
+    # Vanna Exposure Calculation (Sensibilidad del Delta al IV / Vega al Spot)
+    vanna_val = - norm.pdf(d1_calc) * d2_calc / max(atm_iv, 0.001)
+    df_curr.loc[valid_strikes, 'vanna_c'] = vanna_val
+    df_curr.loc[valid_strikes, 'vanna_p'] = vanna_val
+    df_curr['vanna_c'] = df_curr['vanna_c'].fillna(0.0)
+    df_curr['vanna_p'] = df_curr['vanna_p'].fillna(0.0)
+
+    df_curr['call_vanna'] = df_curr['vanna_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
+    df_curr['put_vanna'] = df_curr['vanna_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
+    df_curr['net_vanna'] = df_curr['call_vanna'] + df_curr['put_vanna']
 
     calls_dominant = df_curr[df_curr['net_gex'] > 0].sort_values('net_gex', ascending=False)
     top_calls = calls_dominant['strike'].tolist()
@@ -1114,6 +1132,7 @@ if not df_curr.empty and exp_0dte is not None and spot_price > 0:
     net_tex_total = float(df_curr['net_tex'].sum())
     net_vex_total = float(df_curr['net_vex'].sum())
     net_chex_total = float(df_curr['net_chex'].sum())
+    net_vanna_total = float(df_curr['net_vanna'].sum())
 
     regime_str = "positive regime" if net_gex_total >= 0 else "negative regime"
     condition_str = "Positive – dealers long gamma, hedging dampens volatility (mean-reverting)" if net_gex_total >= 0 else "Negative – dealers short gamma, hedging amplifies trending behavior"
@@ -1127,7 +1146,7 @@ else:
     net_gex_total = 0.0
     call_gex_sum, put_gex_sum, total_gex = 0.0, 0.0, 0.0
     call_oi_sum, put_oi_sum, total_oi_sum = 0, 0, 0
-    net_dex_total, net_tex_total, net_vex_total, net_chex_total = 0.0, 0.0, 0.0, 0.0
+    net_dex_total, net_tex_total, net_vex_total, net_chex_total, net_vanna_total = 0.0, 0.0, 0.0, 0.0, 0.0
     regime_str = "neutral regime"
     condition_str = "Neutral"
     iv_str = "20.00%"
@@ -1206,11 +1225,11 @@ def consultar_ia_cache(
     call_oi_sum, put_oi_sum, total_oi_sum,
     cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
     iv_str, iv_rank_str, condition_str,
-    net_dex_total, net_tex_total, net_vex_total, net_chex_total,
+    net_dex_total, net_tex_total, net_vex_total, net_chex_total, net_vanna_total,
     last_call_drift, last_put_drift, last_net_drift
 ):
     system_prompt = f"""
-    Eres un analista cuantitativo experto en estructura de opciones, Gamma Exposure (GEX), Charm Exposure (CHEX), flujo de prima intradía y microestructura de mercado.
+    Eres un analista cuantitativo experto en estructura de opciones, Gamma Exposure (GEX), Charm Exposure (CHEX), Vanna Exposure, flujo de prima intradía y microestructura de mercado.
     Responde en español de forma analítica, directa y profesional usando viñetas.
 
     REGLAS ESTRICTAS DE FORMATO (OBLIGATORIO):
@@ -1239,9 +1258,10 @@ def consultar_ia_cache(
       * Theta Exposure (TEX): {net_tex_total:,.0f} USD/día
       * Vega Exposure (VEX): {net_vex_total:,.0f} USD/1% IV
       * Charm Exposure (CHEX): {net_chex_total:.2f}M USD/día
+      * Vanna Exposure (VANNA): {net_vanna_total:.2f}M USD
     """
 
-    prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado integrando los niveles GEX, Charm Exposure (CHEX) y el Net Drift intradía para {tipo_analisis}."
+    prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado integrando los niveles GEX, Charm/Vanna Exposure y el Net Drift intradía para {tipo_analisis}."
 
     if GROQ_API_KEY:
         try:
@@ -1267,6 +1287,7 @@ def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
     net_tex_val = float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0
     net_vex_val = float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0
     net_chex_val = float(df_curr['net_chex'].sum()) if not df_curr.empty and 'net_chex' in df_curr.columns else 0.0
+    net_vanna_val = float(df_curr['net_vanna'].sum()) if not df_curr.empty and 'net_vanna' in df_curr.columns else 0.0
 
     return consultar_ia_cache(
         tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, conversion_ratio,
@@ -1274,7 +1295,7 @@ def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
         call_oi_sum, put_oi_sum, total_oi_sum,
         cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
         iv_str, iv_rank_str, condition_str,
-        net_dex_val, net_tex_val, net_vex_val, net_chex_val,
+        net_dex_val, net_tex_val, net_vex_val, net_chex_val, net_vanna_val,
         last_call_drift, last_put_drift, last_net_drift
     )
 
@@ -1294,14 +1315,14 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
                     pass
             st.rerun()
 
-    st.caption("Diagnóstico en vivo del mercado según perfiles GEX, CHEX y Net Drift")
+    st.caption("Diagnóstico en vivo del mercado según perfiles GEX, Grecas y Net Drift")
 
     col_btn1, col_btn2 = st.columns(2)
     if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
         with st.spinner("Analizando pre-market..."):
             res = consultar_ia(
                 tipo_analisis="Pre-Market",
-                mensaje_usuario="Analiza la estructura Pre-Market integrando el régimen de Gamma, Charm Exposure (CHEX), niveles clave (Walls, Zero Gamma) y el comportamiento del Net Drift reciente."
+                mensaje_usuario="Analiza la estructura Pre-Market integrando el régimen de Gamma, Grecas (Delta, Theta, Vega, Charm, Vanna), niveles clave (Walls, Zero Gamma) y el comportamiento del Net Drift reciente."
             )
             save_chat_message("assistant", res)
 
@@ -1309,7 +1330,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
         with st.spinner("Analizando flujo intradía..."):
             res = consultar_ia(
                 tipo_analisis="Mercado Intradía",
-                mensaje_usuario="Analiza el mercado intradía evaluando el flujo en vivo de Gamma, decaimiento de Charm (CHEX), la fuerza direccional del Net Drift y los puntos de inflexión esperados."
+                mensaje_usuario="Analiza el mercado intradía evaluando el flujo en vivo de Gamma, decaimiento por Charm/Vanna, la fuerza direccional del Net Drift y los puntos de inflexión esperados."
             )
             save_chat_message("assistant", res)
 
@@ -1319,7 +1340,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    if chat_input := st.chat_input("Escribe tu pregunta sobre GEX, CHEX o Net Drift..."):
+    if chat_input := st.chat_input("Escribe tu pregunta sobre GEX, Grecas o Net Drift..."):
         save_chat_message("user", chat_input)
         with st.chat_message("user"):
             st.write(chat_input)
@@ -1431,10 +1452,11 @@ def export_snapshot_throttled():
 export_snapshot_throttled()
 
 # --- PESTAÑAS PRINCIPALES ---
-tab_gex, tab_live, tab_drift, tab_back, tab_data = st.tabs([
+tab_gex, tab_live, tab_drift, tab_greeks, tab_back, tab_data = st.tabs([
     "GEX INFO",
     "LIVE GAMMA",
     "NET DRIFT",
+    "GREEKS",
     "BACKGAMMA",
     "DATA"
 ])
@@ -1765,7 +1787,149 @@ with tab_drift:
         
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 4. BACKGAMMA (REPRODUCCIÓN HISTÓRICA) ---
+# --- 4. GREEKS (DELA, THETA, VEGA, CHARM, VANNA) ---
+with tab_greeks:
+    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📊 PERFILES DE EXPOSICIÓN DE GRECAS</h3>", unsafe_allow_html=True)
+
+    g1, g2, g3, g4, g5 = st.columns(5)
+    g1.markdown(f'<div class="metric-card"><div class="metric-label">Net Delta (DEX)</div><div class="metric-value" style="color:#60A5FA;">${net_dex_total:.2f}M</div><div class="metric-sub">Delta Exposure</div></div>', unsafe_allow_html=True)
+    g2.markdown(f'<div class="metric-card"><div class="metric-label">Net Theta (TEX)</div><div class="metric-value" style="color:#F59E0B;">${net_tex_total:,.0f}</div><div class="metric-sub">Decaimiento / Día</div></div>', unsafe_allow_html=True)
+    g3.markdown(f'<div class="metric-card"><div class="metric-label">Net Vega (VEX)</div><div class="metric-value" style="color:#8B5CF6;">${net_vex_total:,.0f}</div><div class="metric-sub">Por +1% IV</div></div>', unsafe_allow_html=True)
+    g4.markdown(f'<div class="metric-card"><div class="metric-label">Net Charm (CHEX)</div><div class="metric-value" style="color:#10B981;">${net_chex_total:.2f}M</div><div class="metric-sub">Decaimiento Delta / Día</div></div>', unsafe_allow_html=True)
+    g5.markdown(f'<div class="metric-card"><div class="metric-label">Net Vanna (VANNA)</div><div class="metric-value" style="color:#EC4899;">${net_vanna_total:.2f}M</div><div class="metric-sub">Sensibilidad Delta a Vol</div></div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
+
+    sub_grk1, sub_grk2, sub_grk3, sub_grk4, sub_grk5 = st.tabs([
+        "DELTA (DEX)",
+        "THETA (TEX)",
+        "VEGA (VEX)",
+        "CHARM (CHEX)",
+        "VANNA (VANNA EX)"
+    ])
+
+    if not df_curr.empty and 'strike' in df_curr.columns:
+        df_grk_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+        xaxis_kwargs_grk = safe_strike_range(df_grk_sub)
+
+        # 1. DELTA (DEX)
+        with sub_grk1:
+            if not df_grk_sub.empty and 'net_dex' in df_grk_sub.columns:
+                fig_dex = go.Figure()
+                fig_dex.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['call_dex'],
+                    name="Call DEX", marker_color='#10B981'
+                ))
+                fig_dex.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['put_dex'],
+                    name="Put DEX", marker_color='#EF4444'
+                ))
+                if spot_price > 0:
+                    fig_dex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                
+                fig_dex.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="<b>Delta Exposure (DEX) por Strike (M USD)</b>", barmode='relative',
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs_grk),
+                    yaxis=dict(title="DEX ($M)", gridcolor="rgba(255,255,255,0.05)"),
+                    height=480, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig_dex, use_container_width=True)
+
+        # 2. THETA (TEX)
+        with sub_grk2:
+            if not df_grk_sub.empty and 'net_tex' in df_grk_sub.columns:
+                fig_tex = go.Figure()
+                fig_tex.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['call_tex'],
+                    name="Call TEX", marker_color='#10B981'
+                ))
+                fig_tex.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['put_tex'],
+                    name="Put TEX", marker_color='#EF4444'
+                ))
+                if spot_price > 0:
+                    fig_tex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                
+                fig_tex.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="<b>Theta Exposure (TEX - Decaimiento Temporal USD/Día)</b>", barmode='relative',
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs_grk),
+                    yaxis=dict(title="TEX ($/Día)", gridcolor="rgba(255,255,255,0.05)"),
+                    height=480, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig_tex, use_container_width=True)
+
+        # 3. VEGA (VEX)
+        with sub_grk3:
+            if not df_grk_sub.empty and 'net_vex' in df_grk_sub.columns:
+                fig_vex = go.Figure()
+                fig_vex.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['call_vex'],
+                    name="Call VEX", marker_color='#8B5CF6'
+                ))
+                fig_vex.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['put_vex'],
+                    name="Put VEX", marker_color='#F43F5E'
+                ))
+                if spot_price > 0:
+                    fig_vex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                
+                fig_vex.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="<b>Vega Exposure (VEX - Sensibilidad a +1% Volatilidad)</b>", barmode='relative',
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs_grk),
+                    yaxis=dict(title="VEX ($/1% IV)", gridcolor="rgba(255,255,255,0.05)"),
+                    height=480, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig_vex, use_container_width=True)
+
+        # 4. CHARM (CHEX)
+        with sub_grk4:
+            if not df_grk_sub.empty and 'net_chex' in df_grk_sub.columns:
+                fig_chex = go.Figure()
+                colors_chex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_chex']]
+                fig_chex.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['net_chex'],
+                    marker_color=colors_chex, name="Net CHEX"
+                ))
+                if spot_price > 0:
+                    fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                
+                fig_chex.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="<b>Charm Exposure (CHEX - Decaimiento de Delta por Tiempo M USD/Día)</b>",
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs_grk),
+                    yaxis=dict(title="CHEX ($M/Día)", gridcolor="rgba(255,255,255,0.05)"),
+                    height=480, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig_chex, use_container_width=True)
+
+        # 5. VANNA (VANNA EX)
+        with sub_grk5:
+            if not df_grk_sub.empty and 'net_vanna' in df_grk_sub.columns:
+                fig_vanna = go.Figure()
+                colors_vanna = ['#EC4899' if v >= 0 else '#8B5CF6' for v in df_grk_sub['net_vanna']]
+                fig_vanna.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['net_vanna'],
+                    marker_color=colors_vanna, name="Net Vanna"
+                ))
+                if spot_price > 0:
+                    fig_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                
+                fig_vanna.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="<b>Vanna Exposure (Sensibilidad de Delta respecto al cambio en IV)</b>",
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs_grk),
+                    yaxis=dict(title="Vanna Exposure ($M)", gridcolor="rgba(255,255,255,0.05)"),
+                    height=480, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig_vanna, use_container_width=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# --- 5. BACKGAMMA (REPRODUCCIÓN HISTÓRICA) ---
 with tab_back:
     st.markdown('<div class="backtest-controls">', unsafe_allow_html=True)
     st.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.80rem; font-weight:800; color:#F0F6FC; letter-spacing:1px; margin-bottom:10px;'>⏮️ REPRODUCCIÓN & BACKTESTING DE SNAPSHOTS</p>", unsafe_allow_html=True)
@@ -1913,7 +2077,7 @@ with tab_back:
 
         st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 5. DATA ---
+# --- 6. DATA ---
 with tab_data:
     if not df_curr.empty:
         st.dataframe(df_curr, use_container_width=True)
