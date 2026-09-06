@@ -1671,7 +1671,7 @@ with tab_greeks:
     st.markdown('<div class="depth-frame" style="border: 1px solid rgba(168, 85, 247, 0.25);">', unsafe_allow_html=True)
     st.markdown("<h3 style='margin-top:0; font-weight:800; color:#C084FC; font-size:1.1rem; letter-spacing:0.5px;'>📊 PERFILES DE EXPOSICIÓN DE GRIEGAS</h3>", unsafe_allow_html=True)
 
-    # Color signature único para las Griegas (A855F7 / C084FC)
+    # Cards superiores
     g1, g2, g3, g4, g5 = st.columns(5)
     g1.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Delta (DEX)</div><div class="metric-value" style="color:#A855F7;">${net_dex_total:.2f}M</div><div class="metric-sub" style="color:#E9D5FF;">Griega Delta Exposure</div></div>', unsafe_allow_html=True)
     g2.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Theta (TEX)</div><div class="metric-value" style="color:#A855F7;">${net_tex_total:,.0f}</div><div class="metric-sub" style="color:#E9D5FF;">Griega Decaimiento / Día</div></div>', unsafe_allow_html=True)
@@ -1689,49 +1689,124 @@ with tab_greeks:
         df_grk_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
         xaxis_kwargs_grk = safe_strike_range(df_grk_sub)
 
+        # 1. DELTA (DEX) -> Paleta Azul (Call: #38BDF8 Sky Blue / Put: #1E3A8A Dark Blue)
         with sub_grk1:
             if not df_grk_sub.empty and 'net_dex' in df_grk_sub.columns:
+                # NET DEX PROFILE (Arriba) - Verde/Rojo para todas las Griegas
+                fig_net_dex = go.Figure()
+                colors_net_dex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_dex']]
+                fig_net_dex.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['net_dex'], marker_color=colors_net_dex, name="Net DEX",
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net DEX:</b> %{customdata}<extra></extra>", customdata=[fmt_val(v) for v in df_grk_sub['net_dex']]
+                ))
+                if spot_price > 0: fig_net_dex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_net_dex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Delta Exposure Profile (DEX - M USD)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=420)
+                st.plotly_chart(fig_net_dex, use_container_width=True)
+
+                st.markdown("<hr style='border-color:rgba(255,255,255,0.06); margin: 20px 0;'>", unsafe_allow_html=True)
+
+                # CALLS vs PUTS DEX (Abajo)
                 fig_dex = go.Figure()
-                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_dex'], name="Call DEX", marker_color='#A855F7'))
-                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_dex'], name="Put DEX", marker_color='#7E22CE'))
+                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_dex'], name="Call DEX (+)", marker_color='#38BDF8'))
+                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_dex'], name="Put DEX (-)", marker_color='#1E3A8A'))
                 if spot_price > 0: fig_dex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_dex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Delta Exposure (DEX) por Strike (M USD)</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
+                fig_dex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Call DEX vs Put DEX por Strike</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=420)
                 st.plotly_chart(fig_dex, use_container_width=True)
 
+        # 2. THETA (TEX) -> Paleta Naranja/Marrón (Call: #FB923C Light Orange / Put: #7C2D12 Dark Rust)
         with sub_grk2:
             if not df_grk_sub.empty and 'net_tex' in df_grk_sub.columns:
+                # NET TEX PROFILE (Arriba)
+                fig_net_tex = go.Figure()
+                colors_net_tex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_tex']]
+                fig_net_tex.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['net_tex'], marker_color=colors_net_tex, name="Net TEX",
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net TEX:</b> %{customdata}<extra></extra>", customdata=[fmt_val(v) for v in df_grk_sub['net_tex']]
+                ))
+                if spot_price > 0: fig_net_tex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_net_tex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Theta Exposure Profile (TEX - Decaimiento USD/Día)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=420)
+                st.plotly_chart(fig_net_tex, use_container_width=True)
+
+                st.markdown("<hr style='border-color:rgba(255,255,255,0.06); margin: 20px 0;'>", unsafe_allow_html=True)
+
+                # CALLS vs PUTS TEX (Abajo)
                 fig_tex = go.Figure()
-                fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_tex'], name="Call TEX", marker_color='#A855F7'))
-                fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_tex'], name="Put TEX", marker_color='#7E22CE'))
+                fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_tex'], name="Call TEX (+)", marker_color='#FB923C'))
+                fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_tex'], name="Put TEX (-)", marker_color='#7C2D12'))
                 if spot_price > 0: fig_tex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_tex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Theta Exposure (TEX - Decaimiento USD/Día)</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
+                fig_tex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Call TEX vs Put TEX por Strike</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=420)
                 st.plotly_chart(fig_tex, use_container_width=True)
 
+        # 3. VEGA (VEX) -> Paleta Verde Esmeralda/Bosque (Call: #34D399 Light Mint / Put: #064E3B Dark Forest)
         with sub_grk3:
             if not df_grk_sub.empty and 'net_vex' in df_grk_sub.columns:
+                # NET VEX PROFILE (Arriba)
+                fig_net_vex = go.Figure()
+                colors_net_vex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vex']]
+                fig_net_vex.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['net_vex'], marker_color=colors_net_vex, name="Net VEX",
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net VEX:</b> %{customdata}<extra></extra>", customdata=[fmt_val(v) for v in df_grk_sub['net_vex']]
+                ))
+                if spot_price > 0: fig_net_vex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_net_vex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Vega Exposure Profile (VEX - Sensibilidad a +1% IV)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=420)
+                st.plotly_chart(fig_net_vex, use_container_width=True)
+
+                st.markdown("<hr style='border-color:rgba(255,255,255,0.06); margin: 20px 0;'>", unsafe_allow_html=True)
+
+                # CALLS vs PUTS VEX (Abajo)
                 fig_vex = go.Figure()
-                fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vex'], name="Call VEX", marker_color='#C084FC'))
-                fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vex'], name="Put VEX", marker_color='#6B21A8'))
+                fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vex'], name="Call VEX (+)", marker_color='#34D399'))
+                fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vex'], name="Put VEX (-)", marker_color='#064E3B'))
                 if spot_price > 0: fig_vex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_vex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Vega Exposure (VEX - Sensibilidad a +1% IV)</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
+                fig_vex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Call VEX vs Put VEX por Strike</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=420)
                 st.plotly_chart(fig_vex, use_container_width=True)
 
+        # 4. CHARM (CHEX) -> Paleta Amarillo/Marrón Dorado (Call: #FACC15 Light Yellow / Put: #713F12 Dark Gold)
         with sub_grk4:
             if not df_grk_sub.empty and 'net_chex' in df_grk_sub.columns:
+                # NET CHEX PROFILE (Arriba)
+                fig_net_chex = go.Figure()
+                colors_net_chex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_chex']]
+                fig_net_chex.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['net_chex'], marker_color=colors_net_chex, name="Net CHEX",
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net CHEX:</b> %{customdata}<extra></extra>", customdata=[fmt_val(v) for v in df_grk_sub['net_chex']]
+                ))
+                if spot_price > 0: fig_net_chex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_net_chex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Charm Exposure Profile (CHEX - Decaimiento Delta M USD/Día)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=420)
+                st.plotly_chart(fig_net_chex, use_container_width=True)
+
+                st.markdown("<hr style='border-color:rgba(255,255,255,0.06); margin: 20px 0;'>", unsafe_allow_html=True)
+
+                # CALLS vs PUTS CHEX (Abajo)
                 fig_chex = go.Figure()
-                colors_chex = ['#A855F7' if v >= 0 else '#6B21A8' for v in df_grk_sub['net_chex']]
-                fig_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_chex'], marker_color=colors_chex, name="Net CHEX"))
+                fig_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_chex'], name="Call CHEX (+)", marker_color='#FACC15'))
+                fig_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_chex'], name="Put CHEX (-)", marker_color='#713F12'))
                 if spot_price > 0: fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_chex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Charm Exposure (CHEX - Decaimiento de Delta por Tiempo M USD/Día)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
+                fig_chex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Call CHEX vs Put CHEX por Strike</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=420)
                 st.plotly_chart(fig_chex, use_container_width=True)
 
+        # 5. VANNA (VANNA EX) -> Paleta Rosado/Morado (Call: #F472B6 Light Pink / Put: #581C87 Dark Purple)
         with sub_grk5:
             if not df_grk_sub.empty and 'net_vanna' in df_grk_sub.columns:
+                # NET VANNA PROFILE (Arriba)
+                fig_net_vanna = go.Figure()
+                colors_net_vanna = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vanna']]
+                fig_net_vanna.add_trace(go.Bar(
+                    x=df_grk_sub['strike'], y=df_grk_sub['net_vanna'], marker_color=colors_net_vanna, name="Net VANNA",
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net VANNA:</b> %{customdata}<extra></extra>", customdata=[fmt_val(v) for v in df_grk_sub['net_vanna']]
+                ))
+                if spot_price > 0: fig_net_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_net_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Vanna Exposure Profile (VANNA - Sensibilidad Delta a IV)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=420)
+                st.plotly_chart(fig_net_vanna, use_container_width=True)
+
+                st.markdown("<hr style='border-color:rgba(255,255,255,0.06); margin: 20px 0;'>", unsafe_allow_html=True)
+
+                # CALLS vs PUTS VANNA (Abajo)
                 fig_vanna = go.Figure()
-                colors_vanna = ['#C084FC' if v >= 0 else '#581C87' for v in df_grk_sub['net_vanna']]
-                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_vanna'], marker_color=colors_vanna, name="Net VANNA"))
+                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vanna'], name="Call VANNA (+)", marker_color='#F472B6'))
+                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vanna'], name="Put VANNA (-)", marker_color='#581C87'))
                 if spot_price > 0: fig_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Vanna Exposure (VANNA - Sensibilidad Delta a IV)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
+                fig_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Call VANNA vs Put VANNA por Strike</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=420)
                 st.plotly_chart(fig_vanna, use_container_width=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1766,59 +1841,29 @@ with tab_data:
             <h3 style="margin-top:0; color:#60A5FA; font-family:'JetBrains Mono'; font-weight:800; font-size:1.2rem; letter-spacing:0.5px;">
                 📄 GEX QUANT TERMINAL - INTRADAY SNAPSHOT REPORT
             </h3>
-            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-top:15px; font-family:'JetBrains Mono'; font-size:0.82rem;">
-                <div><b>Symbol:</b> {ticker_symbol} | <b>Spot Price:</b> ${spot_price:.2f} USD</div>
-                <div><b>Implied Volatility (IV):</b> {iv_str} ({iv_rank_str})</div>
-                <div><b>Market Regime:</b> <span style="color:{'#10B981' if net_gex_total>=0 else '#EF4444'}; font-weight:bold;">{regime_str}</span></div>
-                <div><b>Open Interest:</b> Calls: {call_oi_sum:,} | Puts: {put_oi_sum:,} | Total: {total_oi_sum:,}</div>
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-top:15px; font-family:'JetBrains Mono'; font-size:0.8rem; color:#8B949E;">
+                <div><b>TICKER:</b> <span style="color:#F0F6FC;">{ticker_symbol}</span></div>
+                <div><b>SPOT:</b> <span style="color:#F0F6FC;">${spot_price:.2f}</span></div>
+                <div><b>NET GEX:</b> <span style="color:{'#10B981' if net_gex_total>=0 else '#EF4444'};">{fmt_val(net_gex_total)}</span></div>
+                <div><b>IV ATM:</b> <span style="color:#F0F6FC;">{iv_str}</span></div>
+                <div><b>ZERO GAMMA:</b> <span style="color:#F59E0B;">${zero_gamma:.2f}</span></div>
+                <div><b>CALL WALL 1:</b> <span style="color:#10B981;">${cw1:.0f}</span></div>
+                <div><b>PUT WALL 1:</b> <span style="color:#EF4444;">${pw1:.0f}</span></div>
+                <div><b>RATIO NQ/QQQ:</b> <span style="color:#60A5FA;">{conversion_ratio:.4f}</span></div>
             </div>
         </div>
     """, unsafe_allow_html=True)
 
-    # TABLA 1: NIVELES CLAVE Y PERFIL GEX
-    st.markdown("<h4 style='color:#F0F6FC; font-family:\"JetBrains Mono\"; font-weight:700;'>📊 TABLA 1: NIVELES CLAVE Y PERFIL GEX</h4>", unsafe_allow_html=True)
-    t1_data = [
-        {"Métrica / Nivel": "Net GEX Total", "Valor (USD)": fmt_val(net_gex_total), "Notas / Descripción": "Positive regime (Dampens volatility)" if net_gex_total >= 0 else "Negative regime (Amplifies volatility)"},
-        {"Métrica / Nivel": "Call GEX", "Valor (USD)": fmt_val(call_gex_sum), "Notas / Descripción": "Total Call Gamma Exposure"},
-        {"Métrica / Nivel": "Put GEX", "Valor (USD)": fmt_val(put_gex_sum), "Notas / Descripción": "Total Put Gamma Exposure"},
-        {"Métrica / Nivel": "Call Wall 1 (CW1)", "Valor (USD)": f"${cw1:.0f}", "Notas / Descripción": "Major Resistance Level"},
-        {"Métrica / Nivel": "Call Wall 2 (CW2)", "Valor (USD)": f"${cw2:.0f}", "Notas / Descripción": "Secondary Resistance Level"},
-        {"Métrica / Nivel": "Call Wall 3 (CW3)", "Valor (USD)": f"${cw3:.0f}", "Notas / Descripción": "Upper Extension Level"},
-        {"Métrica / Nivel": "Put Wall 1 (PW1)", "Valor (USD)": f"${pw1:.0f}", "Notas / Descripción": "Major Support Level"},
-        {"Métrica / Nivel": "Put Wall 2 (PW2)", "Valor (USD)": f"${pw2:.0f}", "Notas / Descripción": "Secondary Support Level"},
-        {"Métrica / Nivel": "Put Wall 3 (PW3)", "Valor (USD)": f"${pw3:.0f}", "Notas / Descripción": "Lower Extension Level"},
-        {"Métrica / Nivel": "Zero Gamma (Flip)", "Valor (USD)": f"${zero_gamma:.2f}", "Notas / Descripción": "Pivotal Shift Threshold (Regime Change)"}
-    ]
-    st.dataframe(pd.DataFrame(t1_data), use_container_width=True)
-
-    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
-
-    # TABLA 2: RESUMEN DE GRIEGAS (GREEKS SUMMARY)
-    st.markdown("<h4 style='color:#C084FC; font-family:\"JetBrains Mono\"; font-weight:700;'>📊 TABLA 2: RESUMEN DE GRIEGAS (GREEKS SUMMARY)</h4>", unsafe_allow_html=True)
-    net_dex_val = float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0
-    net_tex_val = float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0
-    net_vex_val = float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0
-    net_chex_val = float(df_curr['net_chex'].sum()) if not df_curr.empty and 'net_chex' in df_curr.columns else 0.0
-    net_vanna_val = float(df_curr['net_vanna'].sum()) if not df_curr.empty and 'net_vanna' in df_curr.columns else 0.0
-
-    t2_data = [
-        {"Griega": "Delta Exposure (DEX)", "Valor Total": f"${net_dex_val:.2f}M USD", "Descripción": "Sensibilidad direccional acumulada de deltas"},
-        {"Griega": "Theta Exposure (TEX)", "Valor Total": f"${net_tex_val:,.0f} USD/día", "Descripción": "Decaimiento por paso del tiempo en primas"},
-        {"Griega": "Vega Exposure (VEX)", "Valor Total": f"${net_vex_val:,.0f} USD / 1% IV", "Descripción": "Sensibilidad al cambio de volatilidad implícita"},
-        {"Griega": "Charm Exposure (CHEX)", "Valor Total": f"${net_chex_val:.2f}M USD/día", "Descripción": "Decaimiento de Delta por paso del tiempo"},
-        {"Griega": "Vanna Exposure (VANNA)", "Valor Total": f"${net_vanna_val:.2f}M USD", "Descripción": "Sensibilidad de Delta ante cambios en IV"}
-    ]
-    st.dataframe(pd.DataFrame(t2_data), use_container_width=True)
-
-    st.markdown("<hr style='border-color:rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
-    st.markdown("<h4 style='color:#F0F6FC; font-family:\"JetBrains Mono\"; font-weight:700;'>🧠 REPORTE Y DIAGNÓSTICO ESTRATÉGICO CON IA</h4>", unsafe_allow_html=True)
-
-    if st.button("⚡ GENERAR INFORME CUANTITATIVO COMPLETO", key="btn_gen_data_ai", use_container_width=True):
-        with st.spinner("Generando informe analítico cuantitativo..."):
-            informe_res = consultar_ia(
-                tipo_analisis="Informe Data Snapshot",
-                mensaje_usuario="Genera el Diagnóstico Estratégico completo con base en los datos del Snapshot Report, perfiles GEX y Griegas."
-            )
-            st.markdown(informe_res)
-
+    if not df_curr.empty:
+        st.markdown("<h4 style='color:#F0F6FC;'>Tabla de Opciones y Exposición por Strike</h4>", unsafe_allow_html=True)
+        st.dataframe(df_curr, use_container_width=True)
+        
+        csv_data = df_curr.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Descargar CSV de Exposición",
+            data=csv_data,
+            file_name=f"gex_exposure_{ticker_symbol}_{now_tz.strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
     st.markdown('</div>', unsafe_allow_html=True)
