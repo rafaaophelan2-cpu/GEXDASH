@@ -313,7 +313,9 @@ if "chat_messages" not in st.session_state:
 def clean_ai_response(text: str) -> str:
     if not text:
         return ""
+    # Elimina los símbolos $ que activan la notación matemática LaTeX en Streamlit
     cleaned = text.replace("$", "")
+    # Elimina delimitadores LaTeX explícitos
     cleaned = cleaned.replace(r"\(", "").replace(r"\)", "").replace(r"\[", "").replace(r"\]", "")
     return cleaned
 
@@ -587,6 +589,7 @@ def parse_schwab_chain(chain_data):
                 'delta_c': 0.0, 'delta_p': 0.0,
                 'theta_c': 0.0, 'theta_p': 0.0,
                 'vega_c': 0.0, 'vega_p': 0.0,
+                'rho_c': 0.0, 'rho_p': 0.0,
                 'iv_c': 0.0, 'iv_p': 0.0
             }
         records[strike]['openInterest_c'] = opt.get('openInterest', 0)
@@ -594,6 +597,7 @@ def parse_schwab_chain(chain_data):
         records[strike]['delta_c'] = opt.get('delta', 0.0)
         records[strike]['theta_c'] = opt.get('theta', 0.0)
         records[strike]['vega_c'] = opt.get('vega', 0.0)
+        records[strike]['rho_c'] = opt.get('rho', 0.0)
         vol = opt.get('volatility', opt.get('impliedVolatility', 0.0))
         records[strike]['iv_c'] = vol / 100.0 if vol > 2 else vol
 
@@ -609,6 +613,7 @@ def parse_schwab_chain(chain_data):
                 'delta_c': 0.0, 'delta_p': 0.0,
                 'theta_c': 0.0, 'theta_p': 0.0,
                 'vega_c': 0.0, 'vega_p': 0.0,
+                'rho_c': 0.0, 'rho_p': 0.0,
                 'iv_c': 0.0, 'iv_p': 0.0
             }
         records[strike]['openInterest_p'] = opt.get('openInterest', 0)
@@ -616,6 +621,7 @@ def parse_schwab_chain(chain_data):
         records[strike]['delta_p'] = opt.get('delta', 0.0)
         records[strike]['theta_p'] = opt.get('theta', 0.0)
         records[strike]['vega_p'] = opt.get('vega', 0.0)
+        records[strike]['rho_p'] = opt.get('rho', 0.0)
         vol = opt.get('volatility', opt.get('impliedVolatility', 0.0))
         records[strike]['iv_p'] = vol / 100.0 if vol > 2 else vol
 
@@ -683,6 +689,10 @@ if not df_curr.empty and exp_0dte is not None:
     df_curr['put_vex'] = df_curr['vega_p'] * df_curr['openInterest_p'] * 100
     df_curr['net_vex'] = df_curr['call_vex'] + df_curr['put_vex']
 
+    df_curr['call_rex'] = df_curr['rho_c'] * df_curr['openInterest_c'] * 100
+    df_curr['put_rex'] = df_curr['rho_p'] * df_curr['openInterest_p'] * 100
+    df_curr['net_rex'] = df_curr['call_rex'] + df_curr['put_rex']
+
     calls_dominant = df_curr[df_curr['net_gex'] > 0].sort_values('net_gex', ascending=False)
     top_calls = calls_dominant['strike'].tolist()
     cw1 = top_calls[0] if len(top_calls) > 0 else spot_price
@@ -711,6 +721,7 @@ if not df_curr.empty and exp_0dte is not None:
     net_dex_total = float(df_curr['net_dex'].sum())
     net_tex_total = float(df_curr['net_tex'].sum())
     net_vex_total = float(df_curr['net_vex'].sum())
+    net_rex_total = float(df_curr['net_rex'].sum())
 
     regime_str = "positive regime" if net_gex_total >= 0 else "negative regime"
     condition_str = "Positive – dealers long gamma, hedging dampens volatility (mean-reverting)" if net_gex_total >= 0 else "Negative – dealers short gamma, hedging amplifies trending behavior"
@@ -725,7 +736,7 @@ else:
     net_gex_total = 0.0
     call_gex_sum, put_gex_sum, total_gex = 0.0, 0.0, 0.0
     call_oi_sum, put_oi_sum, total_oi_sum = 0, 0, 0
-    net_dex_total, net_tex_total, net_vex_total = 0.0, 0.0, 0.0
+    net_dex_total, net_tex_total, net_vex_total, net_rex_total = 0.0, 0.0, 0.0, 0.0
     regime_str = "neutral regime"
     condition_str = "Neutral"
     iv_str = "20.00%"
@@ -829,7 +840,7 @@ def consultar_ia_cache(
     call_oi_sum, put_oi_sum, total_oi_sum,
     cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
     iv_str, iv_rank_str, condition_str,
-    net_dex_total, net_tex_total, net_vex_total,
+    net_dex_total, net_tex_total, net_vex_total, net_rex_total,
     last_call_drift, last_put_drift, last_net_drift
 ):
     system_prompt = f"""
@@ -867,6 +878,7 @@ def consultar_ia_cache(
       * Delta Exposure (DEX): {net_dex_total:.2f}M USD
       * Theta Exposure (TEX): {net_tex_total:,.0f} USD/día
       * Vega Exposure (VEX): {net_vex_total:,.0f} USD/1% IV
+      * Rho Exposure (REX): {net_rex_total:,.0f} USD/1% Tasa
     """
 
     prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado integrando los niveles GEX y el Net Drift intradía para {tipo_analisis}."
@@ -894,6 +906,7 @@ def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
     net_dex_val = float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0
     net_tex_val = float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0
     net_vex_val = float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0
+    net_rex_val = float(df_curr['net_rex'].sum()) if not df_curr.empty and 'net_rex' in df_curr.columns else 0.0
 
     return consultar_ia_cache(
         tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, conversion_ratio,
@@ -901,7 +914,7 @@ def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
         call_oi_sum, put_oi_sum, total_oi_sum,
         cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
         iv_str, iv_rank_str, condition_str,
-        net_dex_val, net_tex_val, net_vex_val,
+        net_dex_val, net_tex_val, net_vex_val, net_rex_val,
         last_call_drift, last_put_drift, last_net_drift
     )
 
@@ -1591,17 +1604,18 @@ with tab_data:
     with sub_dt2:
         if not df_curr.empty:
             st.dataframe(
-                df_curr[['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex']],
+                df_curr[['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex', 'net_rex']],
                 use_container_width=True,
                 height=600
             )
 
 # --- 6. GREEKS ---
 with tab_greeks:
-    sub_dex, sub_tex, sub_vex = st.tabs([
+    sub_dex, sub_tex, sub_vex, sub_rex = st.tabs([
         "DELTA EXPOSURE (DEX)",
         "THETA EXPOSURE (TEX)",
-        "VEGA EXPOSURE (VEX)"
+        "VEGA EXPOSURE (VEX)",
+        "RHO EXPOSURE (REX)"
     ])
     
     with sub_dex:
@@ -1678,6 +1692,7 @@ with tab_greeks:
                 height=560, margin=dict(l=50, r=40, t=50, b=40)
             )
             st.plotly_chart(fig_vex, use_container_width=True)
+
 
 # --- 7. SURFACE 3D ---
 with tab_3d:
