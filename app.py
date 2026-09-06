@@ -1270,11 +1270,6 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
     system_prompt = f"""
     Eres un analista cuantitativo institucional experto en opciones y estratega de mercado en el GEX Quant Terminal.
     Tu objetivo es entregar un análisis técnico, estructurado y profundo para {ticker_symbol}. 
-    Evalúa la estructura del mercado y genera obligatoriamente 3 escenarios condicionales con PRECIOS REALES extraídos de los datos (Call Wall, Put Wall, Zero Gamma, Spot). 
-    REGLA STRICTA: NUNCA uses las letras 'X', 'Y' ni texto de plantilla. Sustituye cada nivel por su valor numérico real.
-    * **Escenario A (Continuación / Retesteo Aceptado)**: Detalla el comportamiento si el precio rompe y sostiene un nivel clave, especificando los precios exactos de entrada y objetivo.
-    * **Escenario B (Rechazo en Nivel Clave)**: Detalla qué ocurre al rebotar o ser rechazado en la resistencia/soporte principal, con sus precios reales.
-    * **Escenario C (Trampa / Falsa Ruptura)**: Detalla la maniobra de barrido de liquidez (falsa ruptura) y el precio numérico de reversión esperado.
 
     DATOS DEL MERCADO EN TIEMPO REAL ({ticker_symbol}):
     - Ticker: {ticker_symbol} | Spot Price: {spot_price:.2f} USD | Ratio NQ: {conversion_ratio:.4f}
@@ -1362,13 +1357,13 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
             )
             save_chat_message("assistant", res)
 
-if col_btn3.button("🧠 Análisis", key="btn_ai_analisis", use_container_width=True):
-    with st.spinner("Procesando análisis completo..."):
-        res = consultar_ia(
-            tipo_analisis="Análisis Estratégico",
-            mensaje_usuario="Analiza los datos actuales del mercado y redacta los 3 escenarios estratégicos (Continuación, Rechazo y Falsa Ruptura). Utiliza ÚNICAMENTE las cifras y precios numéricos reales del reporte para definir los niveles de entrada, soporte y resistencia. No uses variables genéricas."
-        )
-        save_chat_message("assistant", res)
+    if col_btn3.button("🧠 Análisis", key="btn_ai_analisis", use_container_width=True):
+        with st.spinner("Procesando análisis completo..."):
+            res = consultar_ia(
+                tipo_analisis="Análisis Estratégico",
+                mensaje_usuario="Proporciona el Diagnóstico Estratégico y Probabilidades de Mercado completo indicando la proyección más probable."
+            )
+            save_chat_message("assistant", res)
 
     st.markdown("---")
 
