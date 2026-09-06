@@ -251,6 +251,21 @@ st.markdown("""
         align-items: center;
         gap: 6px;
     }
+    
+    .badge-warning {
+        background: rgba(245, 158, 11, 0.12);
+        border: 1px solid rgba(245, 158, 11, 0.4);
+        color: #F59E0B;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 800;
+        font-size: 0.72rem;
+        letter-spacing: 0.5px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -566,9 +581,23 @@ ref_today = now_tz.floor('D').tz_localize(None)
 hist_raw = fetch_history_schwab(ticker_symbol)
 chain_raw = fetch_option_chain_schwab(ticker_symbol, strike_range)
 
-spot_price = float(chain_raw.get("underlyingPrice", 0.0)) if isinstance(chain_raw, dict) else 0.0
+# Extracción ultra-segura de spot_price
+spot_price = 0.0
+if isinstance(chain_raw, dict):
+    raw_spot = chain_raw.get("underlyingPrice")
+    if raw_spot is not None:
+        try:
+            spot_price = float(raw_spot)
+        except (ValueError, TypeError):
+            spot_price = 0.0
+
 if (spot_price <= 0 or np.isnan(spot_price)) and not hist_raw.empty and 'Close' in hist_raw:
-    spot_price = float(hist_raw['Close'].dropna().iloc[-1])
+    try:
+        valid_closes = hist_raw['Close'].dropna()
+        if not valid_closes.empty:
+            spot_price = float(valid_closes.iloc[-1])
+    except Exception:
+        spot_price = 0.0
 
 def parse_schwab_chain(chain_data):
     if not isinstance(chain_data, dict):
@@ -640,14 +669,17 @@ def parse_schwab_chain(chain_data):
 
 df_curr, exp_0dte = parse_schwab_chain(chain_raw)
 
-# --- DETECCIÓN DE ESTADO Y CARGA DE RESPALDO DESDE JSONBIN ---
-is_online = True
+# --- EVALUACIÓN DE ESTADO REAL (ONLINE vs OFFLINE) ---
+is_online = False
 is_cloud_backup = False
+
+# Solo se considera ONLINE si hay conexión cliente, respuesta no vacía, spot válido y cadena con opciones
+if client is not None and isinstance(chain_raw, dict) and len(chain_raw) > 0 and spot_price > 0 and not df_curr.empty:
+    is_online = True
 
 jsonbin_history_data = fetch_jsonbin_history(JSONBIN_BIN_ID, JSONBIN_API_KEY)
 
-if df_curr.empty or spot_price <= 0:
-    is_online = False
+if not is_online:
     if jsonbin_history_data:
         available_cloud_dates = sorted(list(jsonbin_history_data.keys()))
         if available_cloud_dates:
@@ -678,10 +710,12 @@ with col_head_title:
 
 with col_head_badge:
     st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-    if is_online and not is_cloud_backup:
+    if is_online:
         st.markdown('<div class="badge-online">🟢 ONLINE (EN VIVO)</div>', unsafe_allow_html=True)
+    elif is_cloud_backup:
+        st.markdown('<div class="badge-warning">🟠 OFFLINE (NUBE)</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="badge-offline">🔴 OFFLINE (NUBE)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="badge-offline">🔴 OFFLINE (SIN DATOS)</div>', unsafe_allow_html=True)
 
 with col_head_console:
     with st.popover("💻 CONSOLA", use_container_width=True):
@@ -720,6 +754,8 @@ st.sidebar.markdown(f"""
 """, unsafe_allow_html=True)
 
 def fmt_val(val, show_sign=True):
+    if val is None or np.isnan(val):
+        return "$0.0"
     sign = ("+" if val > 0 else "") if show_sign else ""
     if abs(val) >= 1e9:
         return f"{sign}${val/1e9:.2f}B"
@@ -729,6 +765,20 @@ def fmt_val(val, show_sign=True):
         return f"{sign}${val/1e3:.1f}K"
     else:
         return f"{sign}${val:.1f}"
+
+# Función auxiliar para obtener rangos de ejes seguros sin NaN
+def safe_strike_range(df_sub):
+    if df_sub.empty or 'strike' not in df_sub.columns or df_sub['strike'].dropna().empty:
+        return {}
+    s_min = float(df_sub['strike'].min())
+    s_max = float(df_sub['strike'].max())
+    if np.isnan(s_min) or np.isnan(s_max):
+        return {}
+    if s_min == s_max:
+        return {"range": [s_min - 5, s_max + 5]}
+    x_mid = (s_min + s_max) / 2.0
+    x_half_span = ((s_max - s_min) / 2.0) + 1.0
+    return {"range": [x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)]}
 
 # --- RECALCULO DINÁMICO DE GAMMA ---
 def recalculate_gex_for_spot(df_input, spot_t, T_exp, iv):
@@ -753,18 +803,21 @@ def recalculate_gex_for_spot(df_input, spot_t, T_exp, iv):
     return df_out
 
 # --- CÁLCULOS CUÁNTICOS DE OPCIONES ---
-if not df_curr.empty and exp_0dte is not None:
+if not df_curr.empty and exp_0dte is not None and spot_price > 0:
     exp_date_part = exp_0dte.split(':')[0] if isinstance(exp_0dte, str) and ':' in exp_0dte else str(exp_0dte)
-    exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
-    days_to_exp = max((exp_dt - ref_today).days, 0)
+    try:
+        exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
+        days_to_exp = max((exp_dt - ref_today).days, 0)
+    except Exception:
+        days_to_exp = 0
     T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
 
     near_atm = df_curr[abs(df_curr['strike'] - spot_price) <= (spot_price * 0.025)]
     valid_ivs = []
     if not near_atm.empty:
         for _, r in near_atm.iterrows():
-            if 0.02 < r['iv_c'] < 3.0: valid_ivs.append(r['iv_c'])
-            if 0.02 < r['iv_p'] < 3.0: valid_ivs.append(r['iv_p'])
+            if 0.02 < r.get('iv_c', 0) < 3.0: valid_ivs.append(r['iv_c'])
+            if 0.02 < r.get('iv_p', 0) < 3.0: valid_ivs.append(r['iv_p'])
     atm_iv = float(np.median(valid_ivs)) if len(valid_ivs) > 0 else 0.20
     atm_iv = max(atm_iv, 0.08)
 
@@ -886,8 +939,11 @@ if not h_1m.empty and is_online:
 
     if not df_curr.empty and len(full_timestamps) > 0 and exp_0dte is not None:
         exp_date_part = exp_0dte.split(':')[0] if isinstance(exp_0dte, str) and ':' in exp_0dte else str(exp_0dte)
-        exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
-        days_to_exp = max((exp_dt - ref_today).days, 0)
+        try:
+            exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
+            days_to_exp = max((exp_dt - ref_today).days, 0)
+        except Exception:
+            days_to_exp = 0
         T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
         sigma_k = 0.32
 
@@ -1108,9 +1164,11 @@ cw_diff = ((cw1 - spot_price) / spot_price * 100) if spot_price > 0 else 0
 pw_diff = ((pw1 - spot_price) / spot_price * 100) if spot_price > 0 else 0
 zg_diff = ((zero_gamma - spot_price) / spot_price * 100) if spot_price > 0 else 0
 
+gex_ratio = abs(call_gex_sum/put_gex_sum) if put_gex_sum != 0 else 0.0
+
 k1, k2, k3, k4, k5, k6, k7, k8 = st.columns(8)
 k1.markdown(f'<div class="metric-card"><div class="metric-label">Spot Price</div><div class="metric-value">${spot_price:.2f}</div><div class="metric-sub">{ticker_symbol}</div></div>', unsafe_allow_html=True)
-k2.markdown(f'<div class="metric-card"><div class="metric-label">Net GEX</div><div class="metric-value" style="color:{"#10B981" if net_gex_total >= 0 else "#EF4444"};">{fmt_val(net_gex_total)}</div><div class="metric-sub">Ratio: {abs(call_gex_sum/put_gex_sum) if put_gex_sum != 0 else 0:.2f}</div></div>', unsafe_allow_html=True)
+k2.markdown(f'<div class="metric-card"><div class="metric-label">Net GEX</div><div class="metric-value" style="color:{"#10B981" if net_gex_total >= 0 else "#EF4444"};">{fmt_val(net_gex_total)}</div><div class="metric-sub">Ratio: {gex_ratio:.2f}</div></div>', unsafe_allow_html=True)
 k3.markdown(f'<div class="metric-card"><div class="metric-label">Call GEX</div><div class="metric-value" style="color:#10B981">{fmt_val(call_gex_sum)}</div><div class="metric-sub">{call_oi_sum:,} OI</div></div>', unsafe_allow_html=True)
 k4.markdown(f'<div class="metric-card"><div class="metric-label">Put GEX</div><div class="metric-value" style="color:#EF4444">{fmt_val(put_gex_sum)}</div><div class="metric-sub">{put_oi_sum:,} OI</div></div>', unsafe_allow_html=True)
 k5.markdown(f'<div class="metric-card"><div class="metric-label">Total GEX</div><div class="metric-value" style="color:#3B82F6">{fmt_val(total_gex, show_sign=False)}</div><div class="metric-sub">{total_oi_sum:,} OI</div></div>', unsafe_allow_html=True)
@@ -1119,6 +1177,9 @@ k7.markdown(f'<div class="metric-card"><div class="metric-label">Put Wall</div><
 k8.markdown(f'<div class="metric-card"><div class="metric-label">Zero Gamma</div><div class="metric-value" style="color:#F59E0B">${zero_gamma:.2f}</div><div class="metric-sub">{zg_diff:+.2f}%</div></div>', unsafe_allow_html=True)
 
 st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+if not is_online and not is_cloud_backup:
+    st.warning("⚠️ **Sin datos de mercado activos:** No se obtuvieron datos en vivo de Schwab API (mercado cerrado o credenciales no configuradas) ni respaldos en la nube de JSONBin.")
 
 # --- ALMACENAMIENTO DE SNAPSHOTS 1-MINUTO EN JSONBIN ---
 def push_to_jsonbin_bg(bin_id, api_key, date_key, snapshot_entry):
@@ -1205,128 +1266,130 @@ with tab_gex:
     sub_gex1, sub_gex2 = st.tabs(["NET GEX PROFILE", "CALLS vs PUTS"])
     
     with sub_gex1:
-        if not df_curr.empty:
+        if not df_curr.empty and 'strike' in df_curr.columns:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            colors = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub['net_gex']]
-            
-            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
-            x_mid = (x_min_raw + x_max_raw) / 2.0
-            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
-            x_min_val = x_mid - (x_half_span * 2.0)
-            x_max_val = x_mid + (x_half_span * 2.0)
+            if not df_sub.empty:
+                colors = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub['net_gex']]
+                xaxis_kwargs = safe_strike_range(df_sub)
 
-            y_max_val = df_sub['net_gex'].max()
-            y_min_val = df_sub['net_gex'].min()
-            y_max_adj = (max(y_max_val, 0) * 1.8) if y_max_val > 0 else 1000
-            y_min_adj = (min(y_min_val, 0) * 1.8) if y_min_val < 0 else -1000
+                y_max_val = df_sub['net_gex'].max()
+                y_min_val = df_sub['net_gex'].min()
+                y_max_adj = (max(y_max_val, 0) * 1.8) if y_max_val > 0 else 1000
+                y_min_adj = (min(y_min_val, 0) * 1.8) if y_min_val < 0 else -1000
 
-            fig1 = go.Figure()
-            fig1.add_trace(go.Bar(
-                x=df_sub['strike'],
-                y=df_sub['net_gex'],
-                orientation='v',
-                marker_color=colors,
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net GEX:</b> %{customdata}<extra></extra>",
-                customdata=[fmt_val(v) for v in df_sub['net_gex']]
-            ))
-            
-            fig1.add_vline(
-                x=spot_price,
-                line_color="#3B82F6",
-                line_width=1.5,
-                line_dash="dash",
-                annotation_text="Spot",
-                annotation_position="top",
-                annotation_font=dict(color="#60A5FA", size=11, family="JetBrains Mono")
-            )
-            
-            fig1.update_layout(
-                template="plotly_dark",
-                plot_bgcolor='#06080D',
-                paper_bgcolor='#06080D',
-                title=dict(
-                    text="<b>Strike Profile (Net Gamma Exposure)</b>",
-                    font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")
-                ),
-                xaxis=dict(
-                    title="Strike ($)",
-                    gridcolor="rgba(255,255,255,0.05)",
-                    tickfont=dict(family="JetBrains Mono", color="#8B949E"),
-                    zeroline=False,
-                    range=[x_min_val, x_max_val]
-                ),
-                yaxis=dict(
-                    title="Net GEX ($)",
-                    gridcolor="rgba(255,255,255,0.05)",
-                    tickfont=dict(family="JetBrains Mono", color="#8B949E"),
-                    zeroline=True,
-                    zerolinecolor="rgba(255,255,255,0.15)",
-                    zerolinewidth=1,
-                    range=[y_min_adj, y_max_adj]
-                ),
-                height=560,
-                margin=dict(l=50, r=40, t=50, b=40)
-            )
-            st.plotly_chart(fig1, use_container_width=True)
+                fig1 = go.Figure()
+                fig1.add_trace(go.Bar(
+                    x=df_sub['strike'],
+                    y=df_sub['net_gex'],
+                    orientation='v',
+                    marker_color=colors,
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net GEX:</b> %{customdata}<extra></extra>",
+                    customdata=[fmt_val(v) for v in df_sub['net_gex']]
+                ))
+                
+                if spot_price > 0:
+                    fig1.add_vline(
+                        x=spot_price,
+                        line_color="#3B82F6",
+                        line_width=1.5,
+                        line_dash="dash",
+                        annotation_text="Spot",
+                        annotation_position="top",
+                        annotation_font=dict(color="#60A5FA", size=11, family="JetBrains Mono")
+                    )
+                
+                fig1.update_layout(
+                    template="plotly_dark",
+                    plot_bgcolor='#06080D',
+                    paper_bgcolor='#06080D',
+                    title=dict(
+                        text="<b>Strike Profile (Net Gamma Exposure)</b>",
+                        font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")
+                    ),
+                    xaxis=dict(
+                        title="Strike ($)",
+                        gridcolor="rgba(255,255,255,0.05)",
+                        tickfont=dict(family="JetBrains Mono", color="#8B949E"),
+                        zeroline=False,
+                        **xaxis_kwargs
+                    ),
+                    yaxis=dict(
+                        title="Net GEX ($)",
+                        gridcolor="rgba(255,255,255,0.05)",
+                        tickfont=dict(family="JetBrains Mono", color="#8B949E"),
+                        zeroline=True,
+                        zerolinecolor="rgba(255,255,255,0.15)",
+                        zerolinewidth=1,
+                        range=[y_min_adj, y_max_adj]
+                    ),
+                    height=560,
+                    margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig1, use_container_width=True)
+            else:
+                st.info("No hay datos de strikes disponibles dentro del rango seleccionado.")
+        else:
+            st.info("Esperando datos de la cadena de opciones de Schwab API...")
 
     with sub_gex2:
-        if not df_curr.empty:
+        if not df_curr.empty and 'strike' in df_curr.columns:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            
-            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
-            x_mid = (x_min_raw + x_max_raw) / 2.0
-            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
-            x_min_val = x_mid - (x_half_span * 2.0)
-            x_max_val = x_mid + (x_half_span * 2.0)
+            if not df_sub.empty:
+                xaxis_kwargs = safe_strike_range(df_sub)
 
-            y_max_val = max(df_sub['call_gex'].max(), 0)
-            y_min_val = min(df_sub['put_gex'].min(), 0)
-            y_max_adj = (y_max_val * 1.8) if y_max_val > 0 else 1000
-            y_min_adj = (y_min_val * 1.8) if y_min_val < 0 else -1000
+                y_max_val = max(df_sub['call_gex'].max(), 0)
+                y_min_val = min(df_sub['put_gex'].min(), 0)
+                y_max_adj = (y_max_val * 1.8) if y_max_val > 0 else 1000
+                y_min_adj = (y_min_val * 1.8) if y_min_val < 0 else -1000
 
-            fig2 = go.Figure()
-            fig2.add_trace(go.Bar(
-                x=df_sub['strike'], y=df_sub['call_gex'],
-                name="Call GEX (+)", marker_color='#10B981',
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Call GEX:</b> %{customdata}<extra></extra>",
-                customdata=[fmt_val(v) for v in df_sub['call_gex']]
-            ))
-            fig2.add_trace(go.Bar(
-                x=df_sub['strike'], y=df_sub['put_gex'],
-                name="Put GEX (-)", marker_color='#EF4444',
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Put GEX:</b> %{customdata}<extra></extra>",
-                customdata=[fmt_val(v) for v in df_sub['put_gex']]
-            ))
-            
-            fig2.add_vline(
-                x=spot_price,
-                line_color="#3B82F6",
-                line_width=1.5,
-                line_dash="dash",
-                annotation_text="Spot",
-                annotation_position="top",
-                annotation_font=dict(color="#60A5FA", size=11, family="JetBrains Mono")
-            )
-            
-            fig2.update_layout(
-                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                title=dict(text="<b>Call Gamma vs Put Gamma por Strike</b>", font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")),
-                barmode='relative',
-                xaxis=dict(
-                    title="Strike ($)",
-                    gridcolor="rgba(255,255,255,0.05)",
-                    tickfont=dict(family="JetBrains Mono"),
-                    range=[x_min_val, x_max_val]
-                ),
-                yaxis=dict(
-                    title="Gamma Exposure ($)",
-                    gridcolor="rgba(255,255,255,0.05)",
-                    tickfont=dict(family="JetBrains Mono"),
-                    range=[y_min_adj, y_max_adj]
-                ),
-                height=560, margin=dict(l=50, r=40, t=50, b=40)
-            )
-            st.plotly_chart(fig2, use_container_width=True)
+                fig2 = go.Figure()
+                fig2.add_trace(go.Bar(
+                    x=df_sub['strike'], y=df_sub['call_gex'],
+                    name="Call GEX (+)", marker_color='#10B981',
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Call GEX:</b> %{customdata}<extra></extra>",
+                    customdata=[fmt_val(v) for v in df_sub['call_gex']]
+                ))
+                fig2.add_trace(go.Bar(
+                    x=df_sub['strike'], y=df_sub['put_gex'],
+                    name="Put GEX (-)", marker_color='#EF4444',
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Put GEX:</b> %{customdata}<extra></extra>",
+                    customdata=[fmt_val(v) for v in df_sub['put_gex']]
+                ))
+                
+                if spot_price > 0:
+                    fig2.add_vline(
+                        x=spot_price,
+                        line_color="#3B82F6",
+                        line_width=1.5,
+                        line_dash="dash",
+                        annotation_text="Spot",
+                        annotation_position="top",
+                        annotation_font=dict(color="#60A5FA", size=11, family="JetBrains Mono")
+                    )
+                
+                fig2.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title=dict(text="<b>Call Gamma vs Put Gamma por Strike</b>", font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")),
+                    barmode='relative',
+                    xaxis=dict(
+                        title="Strike ($)",
+                        gridcolor="rgba(255,255,255,0.05)",
+                        tickfont=dict(family="JetBrains Mono"),
+                        **xaxis_kwargs
+                    ),
+                    yaxis=dict(
+                        title="Gamma Exposure ($)",
+                        gridcolor="rgba(255,255,255,0.05)",
+                        tickfont=dict(family="JetBrains Mono"),
+                        range=[y_min_adj, y_max_adj]
+                    ),
+                    height=560, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.info("No hay datos de strikes disponibles en este rango.")
+        else:
+            st.info("Cargando datos de llamadas vs puts...")
 
 # --- 2. LIVE GAMMA ---
 with tab_live:
@@ -1420,7 +1483,7 @@ with tab_live:
 with tab_drift:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
 
-    if len(full_timestamps) > 0:
+    if len(full_timestamps) > 0 and len(call_drift_raw) > 0:
         last_call_val = call_drift_raw[-1] if len(call_drift_raw) > 0 else 0.0
         last_put_val = put_drift_raw[-1] if len(put_drift_raw) > 0 else 0.0
         last_net_val = net_drift_raw[-1] if len(net_drift_raw) > 0 else 0.0
@@ -1715,6 +1778,8 @@ with tab_data:
                 use_container_width=True,
                 height=600
             )
+        else:
+            st.info("No hay tabla de datos disponible actualmente.")
 
 # --- 6. GREEKS ---
 with tab_greeks:
@@ -1726,101 +1791,113 @@ with tab_greeks:
     ])
     
     with sub_dex:
-        if not df_curr.empty:
+        if not df_curr.empty and 'strike' in df_curr.columns:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
-            x_mid = (x_min_raw + x_max_raw) / 2.0
-            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
-            x_min_val, x_max_val = x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)
+            if not df_sub.empty:
+                xaxis_kwargs = safe_strike_range(df_sub)
 
-            fig_dex = go.Figure()
-            fig_dex.add_trace(go.Bar(
-                x=df_sub['strike'], y=df_sub['net_dex'],
-                name="Net DEX ($M)", marker_color='#3B82F6',
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net DEX:</b> $%{y:.2f}M<extra></extra>"
-            ))
-            fig_dex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
+                fig_dex = go.Figure()
+                fig_dex.add_trace(go.Bar(
+                    x=df_sub['strike'], y=df_sub['net_dex'],
+                    name="Net DEX ($M)", marker_color='#3B82F6',
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net DEX:</b> $%{y:.2f}M<extra></extra>"
+                ))
+                if spot_price > 0:
+                    fig_dex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
 
-            fig_dex.update_layout(
-                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                title="Delta Exposure Total (DEX) por Strike ($ Millones)",
-                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
-                yaxis=dict(title="DEX ($ Millones)", gridcolor="rgba(255,255,255,0.05)"),
-                height=560, margin=dict(l=50, r=40, t=50, b=40)
-            )
-            st.plotly_chart(fig_dex, use_container_width=True)
+                fig_dex.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="Delta Exposure Total (DEX) por Strike ($ Millones)",
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
+                    yaxis=dict(title="DEX ($ Millones)", gridcolor="rgba(255,255,255,0.05)"),
+                    height=560, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig_dex, use_container_width=True)
+            else:
+                st.info("No hay datos de DEX en el rango.")
+        else:
+            st.info("Esperando datos de Deltas...")
 
     with sub_tex:
-        if not df_curr.empty:
+        if not df_curr.empty and 'strike' in df_curr.columns:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
-            x_mid = (x_min_raw + x_max_raw) / 2.0
-            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
-            x_min_val, x_max_val = x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)
+            if not df_sub.empty:
+                xaxis_kwargs = safe_strike_range(df_sub)
 
-            fig_tex = go.Figure()
-            fig_tex.add_trace(go.Bar(
-                x=df_sub['strike'], y=df_sub['net_tex'],
-                name="Net TEX ($)", marker_color='#F59E0B',
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net TEX:</b> $%{y:,.0f}<extra></extra>"
-            ))
-            fig_tex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
+                fig_tex = go.Figure()
+                fig_tex.add_trace(go.Bar(
+                    x=df_sub['strike'], y=df_sub['net_tex'],
+                    name="Net TEX ($)", marker_color='#F59E0B',
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net TEX:</b> $%{y:,.0f}<extra></extra>"
+                ))
+                if spot_price > 0:
+                    fig_tex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
 
-            fig_tex.update_layout(
-                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                title="Theta Exposure Total (TEX - Pérdida por Decaimiento Temporal $/día)",
-                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
-                yaxis=dict(title="TEX ($/día)", gridcolor="rgba(255,255,255,0.05)"),
-                height=560, margin=dict(l=50, r=40, t=50, b=40)
-            )
-            st.plotly_chart(fig_tex, use_container_width=True)
+                fig_tex.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="Theta Exposure Total (TEX - Pérdida por Decaimiento Temporal $/día)",
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
+                    yaxis=dict(title="TEX ($/día)", gridcolor="rgba(255,255,255,0.05)"),
+                    height=560, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig_tex, use_container_width=True)
+            else:
+                st.info("No hay datos de TEX en el rango.")
+        else:
+            st.info("Esperando datos de Theta...")
 
     with sub_vex:
-        if not df_curr.empty:
+        if not df_curr.empty and 'strike' in df_curr.columns:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
-            x_mid = (x_min_raw + x_max_raw) / 2.0
-            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
-            x_min_val, x_max_val = x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)
+            if not df_sub.empty:
+                xaxis_kwargs = safe_strike_range(df_sub)
 
-            fig_vex = go.Figure()
-            fig_vex.add_trace(go.Bar(
-                x=df_sub['strike'], y=df_sub['net_vex'],
-                name="Net VEX ($)", marker_color='#8B5CF6',
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net VEX:</b> $%{y:,.0f}<extra></extra>"
-            ))
-            fig_vex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
+                fig_vex = go.Figure()
+                fig_vex.add_trace(go.Bar(
+                    x=df_sub['strike'], y=df_sub['net_vex'],
+                    name="Net VEX ($)", marker_color='#8B5CF6',
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net VEX:</b> $%{y:,.0f}<extra></extra>"
+                ))
+                if spot_price > 0:
+                    fig_vex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
 
-            fig_vex.update_layout(
-                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                title="Vega Exposure Total (VEX - Sensibilidad $/1% Cambio en IV)",
-                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
-                yaxis=dict(title="VEX ($/1% IV)", gridcolor="rgba(255,255,255,0.05)"),
-                height=560, margin=dict(l=50, r=40, t=50, b=40)
-            )
-            st.plotly_chart(fig_vex, use_container_width=True)
+                fig_vex.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="Vega Exposure Total (VEX - Sensibilidad $/1% Cambio en IV)",
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
+                    yaxis=dict(title="VEX ($/1% IV)", gridcolor="rgba(255,255,255,0.05)"),
+                    height=560, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig_vex, use_container_width=True)
+            else:
+                st.info("No hay datos de VEX en el rango.")
+        else:
+            st.info("Esperando datos de Vega...")
 
     with sub_chex:
-        if not df_curr.empty:
+        if not df_curr.empty and 'strike' in df_curr.columns:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
-            x_mid = (x_min_raw + x_max_raw) / 2.0
-            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
-            x_min_val, x_max_val = x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)
+            if not df_sub.empty:
+                xaxis_kwargs = safe_strike_range(df_sub)
 
-            fig_chex = go.Figure()
-            fig_chex.add_trace(go.Bar(
-                x=df_sub['strike'], y=df_sub['net_chex'],
-                name="Net CHEX ($M)", marker_color='#EC4899',
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net CHEX:</b> $%{y:.2f}M<extra></extra>"
-            ))
-            fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
+                fig_chex = go.Figure()
+                fig_chex.add_trace(go.Bar(
+                    x=df_sub['strike'], y=df_sub['net_chex'],
+                    name="Net CHEX ($M)", marker_color='#EC4899',
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net CHEX:</b> $%{y:.2f}M<extra></extra>"
+                ))
+                if spot_price > 0:
+                    fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
 
-            fig_chex.update_layout(
-                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                title="Charm Exposure Total (CHEX - Delta Decay por Día)",
-                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
-                yaxis=dict(title="CHEX ($ Millones/día)", gridcolor="rgba(255,255,255,0.05)"),
-                height=560, margin=dict(l=50, r=40, t=50, b=40)
-            )
-            st.plotly_chart(fig_chex, use_container_width=True)
+                fig_chex.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="Charm Exposure Total (CHEX - Delta Decay por Día)",
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
+                    yaxis=dict(title="CHEX ($ Millones/día)", gridcolor="rgba(255,255,255,0.05)"),
+                    height=560, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig_chex, use_container_width=True)
+            else:
+                st.info("No hay datos de CHEX en el rango.")
+        else:
+            st.info("Esperando datos de Charm...")
