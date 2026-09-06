@@ -221,6 +221,36 @@ st.markdown("""
         padding: 14px 18px;
         margin-bottom: 15px;
     }
+
+    .badge-online {
+        background: rgba(16, 185, 129, 0.12);
+        border: 1px solid rgba(16, 185, 129, 0.4);
+        color: #10B981;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 800;
+        font-size: 0.72rem;
+        letter-spacing: 0.5px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .badge-offline {
+        background: rgba(239, 68, 68, 0.12);
+        border: 1px solid rgba(239, 68, 68, 0.4);
+        color: #EF4444;
+        padding: 5px 12px;
+        border-radius: 6px;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 800;
+        font-size: 0.72rem;
+        letter-spacing: 0.5px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -358,9 +388,21 @@ def get_schwab_client():
         return None
 
 client = get_schwab_client()
-if client is None:
-    log_to_console("Conexión Schwab API", "Token de acceso no válido o ausente.")
-    st.error("No se pudo establecer la conexión con la API de Schwab. Revisa la consola de registros.")
+
+# --- FUNCION LECTURA DE JSONBIN PARA RESPALDO HISTÓRICO ---
+@st.cache_data(ttl=20)
+def fetch_jsonbin_history(bin_id, api_key):
+    if not bin_id or not api_key:
+        return {}
+    try:
+        url = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
+        headers = {"X-Master-Key": api_key}
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            return resp.json().get("record", {})
+    except Exception as e:
+        log_to_console("JSONBin Read Error", str(e))
+    return {}
 
 # --- CLIENTES DE IA (GROQ Y GEMINI) ---
 @st.cache_resource
@@ -407,33 +449,6 @@ def query_groq(system_prompt, user_prompt, api_key):
         else:
             raise Exception(f"Groq API Error {resp.status_code}: {resp.text}")
 
-# --- ENCABEZADO Y BOTÓN CONSOLA TOP-RIGHT ---
-col_head_title, col_head_console = st.columns([7.5, 2.5])
-
-with col_head_title:
-    st.markdown("<h2 style='margin:0; font-weight:800; letter-spacing:-0.5px; background: linear-gradient(90deg, #F0F6FC 0%, #8B949E 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>GEX QUANT TERMINAL</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color:#6E7681; margin:0 0 15px 0; font-size:0.78rem; font-family:\"JetBrains Mono\"; letter-spacing:0.5px;'>SCHWAB REAL-TIME GAMMA EXPOSURE & INTRADAY FLOW</p>", unsafe_allow_html=True)
-
-with col_head_console:
-    with st.popover("💻 CONSOLA", use_container_width=True):
-        st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:800; font-size:0.9rem; color:#F59E0B; margin-bottom:8px;'>💻 CONSOLA DE REGISTROS Y ERRORES</p>", unsafe_allow_html=True)
-        if st.button("🗑️ Limpiar Consola", key="btn_clear_console", use_container_width=True):
-            st.session_state.console_logs = []
-            if supabase:
-                try:
-                    supabase.table("console_logs").delete().neq("id", 0).execute()
-                except Exception:
-                    pass
-            st.rerun()
-        
-        st.markdown("---")
-        if st.session_state.console_logs:
-            for item in reversed(st.session_state.console_logs):
-                st.markdown(f"**[{item['time']}] {item['source']}**")
-                st.code(item['error'], language="python")
-        else:
-            st.info("No hay errores registrados en la consola.")
-
 # --- SIDEBAR CONFIG Y SESIÓN ---
 st.sidebar.markdown(f"<p style='font-family:\"JetBrains Mono\"; font-size:0.75rem; color:#60A5FA; margin-bottom:8px;'>👤 USUARIO: <b>{st.session_state.user_email}</b></p>", unsafe_allow_html=True)
 if st.sidebar.button("🚪 CERRAR SESIÓN", key="btn_logout", use_container_width=True):
@@ -461,7 +476,6 @@ refresh_interval = st.sidebar.select_slider(
     disabled=not auto_refresh
 )
 
-# --- CORRECCIÓN BUG 1: AUTO-REFRESCO EN VIVO ACTIVO ---
 if auto_refresh:
     try:
         from streamlit_autorefresh import st_autorefresh
@@ -540,7 +554,7 @@ def fetch_nq_price_schwab():
         log_to_console("fetch_nq_price_schwab", e)
     return 0.0
 
-# --- PROCESAMIENTO DE DATOS ---
+# --- PROCESAMIENTO Y DETECCIÓN ESTADO ONLINE / OFFLINE ---
 now_tz = pd.Timestamp.now(tz=tz_target)
 ref_today = now_tz.floor('D').tz_localize(None)
 
@@ -551,26 +565,6 @@ spot_price = float(chain_raw.get("underlyingPrice", 0.0))
 if (spot_price <= 0 or np.isnan(spot_price)) and not hist_raw.empty and 'Close' in hist_raw:
     spot_price = float(hist_raw['Close'].dropna().iloc[-1])
 
-if spot_price <= 0 or np.isnan(spot_price):
-    log_to_console("Spot Price Error", f"No se pudo determinar el precio spot para {ticker_symbol}")
-
-nq_price = fetch_nq_price_schwab()
-if nq_price > 0 and spot_price > 0:
-    conversion_ratio = nq_price / spot_price
-else:
-    conversion_ratio = 41.125
-
-st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
-st.sidebar.markdown(f"""
-    <div class="status-card">
-        <span style="font-family:'JetBrains Mono'; font-size:0.68rem; color:#8B949E; font-weight:700;">NQ/QQQ RATIO</span>
-        <span style="font-family:'JetBrains Mono'; font-size:0.88rem; color:#10B981; font-weight:800;">
-            <span class="pulse-dot"></span>{conversion_ratio:.4f}
-        </span>
-    </div>
-""", unsafe_allow_html=True)
-
-# --- CORRECCIÓN BUG 2: NORMALIZACIÓN ESTABLE DE VOLATILIDAD IMPLÍCITA ---
 def parse_schwab_chain(chain_data):
     if not isinstance(chain_data, dict):
         return pd.DataFrame(), None
@@ -641,6 +635,85 @@ def parse_schwab_chain(chain_data):
 
 df_curr, exp_0dte = parse_schwab_chain(chain_raw)
 
+# --- DETECCIÓN DE ESTADO Y CARGA DE RESPALDO DESDE JSONBIN ---
+is_online = True
+is_cloud_backup = False
+
+jsonbin_history_data = fetch_jsonbin_history(JSONBIN_BIN_ID, JSONBIN_API_KEY)
+
+if df_curr.empty or spot_price <= 0:
+    is_online = False
+    if jsonbin_history_data:
+        available_cloud_dates = sorted(list(jsonbin_history_data.keys()))
+        if available_cloud_dates:
+            latest_date_key = available_cloud_dates[-1]
+            latest_day_snaps = jsonbin_history_data.get(latest_date_key, [])
+            if latest_day_snaps:
+                is_cloud_backup = True
+                last_cloud_snap = latest_day_snaps[-1]
+                spot_price = float(last_cloud_snap.get("spot", 0.0))
+                
+                cloud_strikes = last_cloud_snap.get("strikes", [])
+                if cloud_strikes:
+                    df_curr = pd.DataFrame(cloud_strikes)
+                    for col in ['openInterest_c', 'openInterest_p']:
+                        if col not in df_curr.columns: df_curr[col] = 100
+                    for col in ['iv_c', 'iv_p']:
+                        if col not in df_curr.columns: df_curr[col] = 0.20
+                    for col in ['delta_c', 'delta_p', 'theta_c', 'theta_p', 'vega_c', 'vega_p']:
+                        if col not in df_curr.columns: df_curr[col] = 0.0
+                    exp_0dte = latest_date_key
+
+# --- ENCABEZADO Y BADGE DE ESTADO ONLINE / OFFLINE ---
+col_head_title, col_head_badge, col_head_console = st.columns([5.5, 2.2, 2.3])
+
+with col_head_title:
+    st.markdown("<h2 style='margin:0; font-weight:800; letter-spacing:-0.5px; background: linear-gradient(90deg, #F0F6FC 0%, #8B949E 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>GEX QUANT TERMINAL</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#6E7681; margin:0 0 15px 0; font-size:0.78rem; font-family:\"JetBrains Mono\"; letter-spacing:0.5px;'>SCHWAB REAL-TIME GAMMA EXPOSURE & INTRADAY FLOW</p>", unsafe_allow_html=True)
+
+with col_head_badge:
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+    if is_online and not is_cloud_backup:
+        st.markdown('<div class="badge-online">🟢 ONLINE (EN VIVO)</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="badge-offline">🔴 OFFLINE (NUBE)</div>', unsafe_allow_html=True)
+
+with col_head_console:
+    with st.popover("💻 CONSOLA", use_container_width=True):
+        st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:800; font-size:0.9rem; color:#F59E0B; margin-bottom:8px;'>💻 CONSOLA DE REGISTROS Y ERRORES</p>", unsafe_allow_html=True)
+        if st.button("🗑️ Limpiar Consola", key="btn_clear_console", use_container_width=True):
+            st.session_state.console_logs = []
+            if supabase:
+                try:
+                    supabase.table("console_logs").delete().neq("id", 0).execute()
+                except Exception:
+                    pass
+            st.rerun()
+        
+        st.markdown("---")
+        if st.session_state.console_logs:
+            for item in reversed(st.session_state.console_logs):
+                st.markdown(f"**[{item['time']}] {item['source']}**")
+                st.code(item['error'], language="python")
+        else:
+            st.info("No hay errores registrados en la consola.")
+
+nq_price = fetch_nq_price_schwab()
+if nq_price > 0 and spot_price > 0:
+    conversion_ratio = nq_price / spot_price
+else:
+    conversion_ratio = 41.125
+
+st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
+st.sidebar.markdown(f"""
+    <div class="status-card">
+        <span style="font-family:'JetBrains Mono'; font-size:0.68rem; color:#8B949E; font-weight:700;">NQ/QQQ RATIO</span>
+        <span style="font-family:'JetBrains Mono'; font-size:0.88rem; color:#10B981; font-weight:800;">
+            <span class="pulse-dot"></span>{conversion_ratio:.4f}
+        </span>
+    </div>
+""", unsafe_allow_html=True)
+
 def fmt_val(val, show_sign=True):
     sign = ("+" if val > 0 else "") if show_sign else ""
     if abs(val) >= 1e9:
@@ -700,7 +773,6 @@ if not df_curr.empty and exp_0dte is not None:
     df_curr['put_vex'] = df_curr['vega_p'] * df_curr['openInterest_p'] * 100
     df_curr['net_vex'] = df_curr['call_vex'] + df_curr['put_vex']
 
-    # --- CORRECCIÓN BUG 3: CHARM (CHEX) DIFERENCIADO SEGÚN PARIDAD DE OPCIÓN ---
     r_rate = 0.045
     d1_charm = (np.log(spot_price / df_curr['strike']) + (r_rate + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
     d2_charm = d1_charm - atm_iv * np.sqrt(T_exp)
@@ -764,10 +836,10 @@ else:
     iv_str = "20.00%"
     iv_rank_str = "N/A"
 
-# --- CORRECCIÓN BUG 4: ZONA HORARIA Y FILTRADO INTRADÍA CORDENADO ---
+# --- ZONA HORARIA Y FILTRADO INTRADÍA CORDENADO ---
 h_1m = fetch_history_schwab(ticker_symbol)
 
-if not h_1m.empty:
+if not h_1m.empty and is_online:
     h_1m = h_1m.tz_convert(tz_target)
     today_date_str = now_tz.strftime('%Y-%m-%d')
     
@@ -794,45 +866,37 @@ if not h_1m.empty:
     
     spot_series = h_1m_reindexed['Close'].ffill().bfill()
     full_spots = spot_series.fillna(spot_price).tolist()
-else:
-    full_timestamps = []
-    full_spots = []
-    h_1m_reindexed = pd.DataFrame()
+    
+    min_strike = int(np.floor(spot_price - strike_range)) if spot_price > 0 else 0
+    max_strike = int(np.ceil(spot_price + strike_range)) if spot_price > 0 else 100
+    fine_strikes = np.linspace(min_strike, max_strike, int((max_strike - min_strike) * 10 + 1))
+    Z_matrix_real = np.zeros((len(fine_strikes), len(full_timestamps))) if len(full_timestamps) > 0 else np.zeros((0,0))
 
-min_strike = int(np.floor(spot_price - strike_range)) if spot_price > 0 else 0
-max_strike = int(np.ceil(spot_price + strike_range)) if spot_price > 0 else 100
+    if not df_curr.empty and len(full_timestamps) > 0 and exp_0dte is not None:
+        exp_date_part = exp_0dte.split(':')[0] if isinstance(exp_0dte, str) and ':' in exp_0dte else str(exp_0dte)
+        exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
+        days_to_exp = max((exp_dt - ref_today).days, 0)
+        T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
+        sigma_k = 0.32
 
-fine_strikes = np.linspace(min_strike, max_strike, int((max_strike - min_strike) * 10 + 1))
-Z_matrix_real = np.zeros((len(fine_strikes), len(full_timestamps))) if len(full_timestamps) > 0 else np.zeros((0,0))
+        for t_idx, S_t in enumerate(full_spots):
+            if S_t <= 0 or np.isnan(S_t): continue
+            for _, r in df_curr.iterrows():
+                K = r['strike']
+                if K < min_strike - 1 or K > max_strike + 1: continue
+                net_oi = r['openInterest_c'] - r['openInterest_p']
+                if net_oi == 0: continue
 
-if not df_curr.empty and len(full_timestamps) > 0 and exp_0dte is not None:
-    exp_date_part = exp_0dte.split(':')[0] if isinstance(exp_0dte, str) and ':' in exp_0dte else str(exp_0dte)
-    exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
-    days_to_exp = max((exp_dt - ref_today).days, 0)
-    T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
+                d1_t = (np.log(S_t / K) + (0.045 + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
+                gamma_t = norm.pdf(d1_t) / (S_t * atm_iv * np.sqrt(T_exp))
+                net_gex_t = net_oi * gamma_t * (S_t ** 2) * 0.01
 
-    sigma_k = 0.32
+                gauss_weight = np.exp(-0.5 * ((fine_strikes - K) / sigma_k) ** 2)
+                Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
 
-    for t_idx, S_t in enumerate(full_spots):
-        if S_t <= 0 or np.isnan(S_t): continue
-        for _, r in df_curr.iterrows():
-            K = r['strike']
-            if K < min_strike - 1 or K > max_strike + 1: continue
-            net_oi = r['openInterest_c'] - r['openInterest_p']
-            if net_oi == 0: continue
+        if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
+            Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
 
-            d1_t = (np.log(S_t / K) + (0.045 + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
-            gamma_t = norm.pdf(d1_t) / (S_t * atm_iv * np.sqrt(T_exp))
-            net_gex_t = net_oi * gamma_t * (S_t ** 2) * 0.01
-
-            gauss_weight = np.exp(-0.5 * ((fine_strikes - K) / sigma_k) ** 2)
-            Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
-
-    if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
-        Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
-
-# --- CÁLCULO DE NET DRIFT ---
-if len(full_timestamps) > 0:
     closes_drift = h_1m_reindexed['Close'].ffill().bfill().values if not h_1m_reindexed.empty else np.array(full_spots)
     vols_drift = h_1m_reindexed['Volume'].fillna(0).values if not h_1m_reindexed.empty else np.zeros(len(full_timestamps))
     
@@ -841,16 +905,55 @@ if len(full_timestamps) > 0:
         call_drift_raw = np.cumsum(np.where(price_changes_drift >= 0, price_changes_drift * vols_drift * 0.12, price_changes_drift * vols_drift * 0.08))
         put_drift_raw = np.cumsum(np.where(price_changes_drift < 0, -price_changes_drift * vols_drift * 0.18, price_changes_drift * vols_drift * 0.05))
         net_drift_raw = call_drift_raw - put_drift_raw
-        
-        last_call_drift = float(call_drift_raw[-1])
-        last_put_drift = float(put_drift_raw[-1])
-        last_net_drift = float(net_drift_raw[-1])
+        last_call_drift, last_put_drift, last_net_drift = float(call_drift_raw[-1]), float(put_drift_raw[-1]), float(net_drift_raw[-1])
     else:
-        call_drift_raw = np.zeros(len(full_timestamps))
-        put_drift_raw = np.zeros(len(full_timestamps))
-        net_drift_raw = np.zeros(len(full_timestamps))
+        call_drift_raw, put_drift_raw, net_drift_raw = np.zeros(len(full_timestamps)), np.zeros(len(full_timestamps)), np.zeros(len(full_timestamps))
         last_call_drift, last_put_drift, last_net_drift = 0.0, 0.0, 0.0
+
+elif is_cloud_backup and jsonbin_history_data:
+    available_cloud_dates = sorted(list(jsonbin_history_data.keys()))
+    latest_date_key = available_cloud_dates[-1]
+    latest_day_snaps = jsonbin_history_data.get(latest_date_key, [])
+    
+    full_timestamps = [s.get("time") for s in latest_day_snaps]
+    full_spots = [s.get("spot", spot_price) for s in latest_day_snaps]
+    h_1m_reindexed = pd.DataFrame()
+    
+    min_strike = int(np.floor(spot_price - strike_range)) if spot_price > 0 else 0
+    max_strike = int(np.ceil(spot_price + strike_range)) if spot_price > 0 else 100
+    
+    cloud_strikes_set = set()
+    for s in latest_day_snaps:
+        for st_item in s.get("strikes", []):
+            cloud_strikes_set.add(st_item["strike"])
+    fine_strikes = np.array(sorted(list(cloud_strikes_set))) if cloud_strikes_set else np.linspace(min_strike, max_strike, 50)
+    
+    Z_matrix_real = np.zeros((len(fine_strikes), len(latest_day_snaps)))
+    strike_idx_map = {k: i for i, k in enumerate(fine_strikes)}
+    for t_idx, s in enumerate(latest_day_snaps):
+        for st_item in s.get("strikes", []):
+            st_v = st_item["strike"]
+            if st_v in strike_idx_map:
+                Z_matrix_real[strike_idx_map[st_v], t_idx] = st_item.get("net_gex", 0.0)
+                
+    if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
+        Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
+        
+    closes_drift = np.array(full_spots)
+    vols_drift = np.zeros(len(full_timestamps))
+    price_diffs = np.diff(closes_drift, prepend=closes_drift[0]) if len(closes_drift) > 0 else np.array([0])
+    call_drift_raw = np.cumsum(np.where(price_diffs >= 0, price_diffs * 1000, price_diffs * 400))
+    put_drift_raw = np.cumsum(np.where(price_diffs < 0, -price_diffs * 1000, price_diffs * 300))
+    net_drift_raw = call_drift_raw - put_drift_raw
+    last_call_drift = float(call_drift_raw[-1]) if len(call_drift_raw) > 0 else 0.0
+    last_put_drift = float(put_drift_raw[-1]) if len(put_drift_raw) > 0 else 0.0
+    last_net_drift = float(net_drift_raw[-1]) if len(net_drift_raw) > 0 else 0.0
 else:
+    full_timestamps, full_spots = [], []
+    h_1m_reindexed = pd.DataFrame()
+    fine_strikes = np.linspace(0, 100, 50)
+    Z_matrix_real = np.zeros((0,0))
+    closes_drift, vols_drift = np.array([]), np.array([])
     call_drift_raw, put_drift_raw, net_drift_raw = np.array([]), np.array([]), np.array([])
     last_call_drift, last_put_drift, last_net_drift = 0.0, 0.0, 0.0
 
@@ -1003,7 +1106,7 @@ k8.markdown(f'<div class="metric-card"><div class="metric-label">Zero Gamma</div
 
 st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-# --- CORRECCIÓN BUG 6 Y ALMACENAMIENTO DE SNAPSHOTS 1-MINUTO EN JSONBIN Y SUPABASE ---
+# --- ALMACENAMIENTO DE SNAPSHOTS 1-MINUTO EN JSONBIN ---
 def push_to_jsonbin_bg(bin_id, api_key, date_key, snapshot_entry):
     try:
         url = f"https://api.jsonbin.io/v3/b/{bin_id}"
@@ -1025,7 +1128,6 @@ def push_to_jsonbin_bg(bin_id, api_key, date_key, snapshot_entry):
         if snapshot_entry["time"] not in existing_times:
             current_data[date_key].append(snapshot_entry)
             
-            # Mantiene los últimos 15 días acumulados
             if len(current_data) > 15:
                 sorted_dates = sorted(list(current_data.keys()))
                 for old_d in sorted_dates[:-15]:
@@ -1036,7 +1138,7 @@ def push_to_jsonbin_bg(bin_id, api_key, date_key, snapshot_entry):
         log_to_console("JSONBin Async Background Push", str(e))
 
 def export_snapshot_throttled():
-    if ticker_symbol != "QQQ":
+    if ticker_symbol != "QQQ" or not is_online:
         return
 
     last_export = st.session_state.get("last_export_time", 0)
@@ -1296,7 +1398,7 @@ with tab_live:
 
         st.plotly_chart(fig_live, use_container_width=True, config={'scrollZoom': True}, key="heatmap_live")
     else:
-        st.info("Esperando actualización de datos intradía...")
+        st.info("Esperando actualización de datos intradía o cargando desde la nube...")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1420,27 +1522,12 @@ with tab_drift:
         
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 4. BACKGAMMA (REPRODUCCIÓN Y SIMULACIÓN HISTÓRICA DESDE JSONBIN) ---
-@st.cache_data(ttl=20)
-def fetch_jsonbin_history(bin_id, api_key):
-    if not bin_id or not api_key:
-        return {}
-    try:
-        url = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
-        headers = {"X-Master-Key": api_key}
-        resp = requests.get(url, headers=headers, timeout=5)
-        if resp.status_code == 200:
-            return resp.json().get("record", {})
-    except Exception as e:
-        log_to_console("JSONBin Read Error", str(e))
-    return {}
-
+# --- 4. BACKGAMMA (REPRODUCCIÓN HISTÓRICA DESDE JSONBIN) ---
 with tab_back:
     st.markdown('<div class="backtest-controls">', unsafe_allow_html=True)
     st.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.80rem; font-weight:800; color:#F0F6FC; letter-spacing:1px; margin-bottom:10px;'>⏮️ REPRODUCCIÓN & BACKTESTING DE SNAPSHOTS (JSONBIN)</p>", unsafe_allow_html=True)
     
-    jsonbin_records = fetch_jsonbin_history(JSONBIN_BIN_ID, JSONBIN_API_KEY)
-    available_dates = sorted(list(jsonbin_records.keys()), reverse=True) if jsonbin_records else []
+    available_dates = sorted(list(jsonbin_history_data.keys()), reverse=True) if jsonbin_history_data else []
 
     if not available_dates:
         st.warning("No hay fechas registradas en JSONBin. Los snapshots de 1 minuto comenzarán a guardarse automáticamente durante la sesión activa para QQQ.")
@@ -1451,7 +1538,7 @@ with tab_back:
         with col_bd2:
             bt_tf = st.selectbox("INTERVALO DE SALTO (TIMEFRAME)", [1, 5, 15, 30, 60], index=0, key="bt_tf_select")
 
-        day_snaps = jsonbin_records.get(selected_date, [])
+        day_snaps = jsonbin_history_data.get(selected_date, [])
         
         if "bt_snap_index" not in st.session_state:
             st.session_state.bt_snap_index = len(day_snaps) - 1 if day_snaps else 0
@@ -1557,7 +1644,6 @@ with tab_back:
 
             st.plotly_chart(fig_bt_heat, use_container_width=True, key="heatmap_backtest_jsonbin")
 
-            # --- NET GEX PROFILE EN ESE MOMENTO SIMULADO ---
             curr_strikes = current_snap.get("strikes", [])
             if curr_strikes:
                 df_bt_prof = pd.DataFrame(curr_strikes).sort_values("strike")
