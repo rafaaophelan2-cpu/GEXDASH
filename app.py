@@ -587,7 +587,6 @@ def parse_schwab_chain(chain_data):
                 'delta_c': 0.0, 'delta_p': 0.0,
                 'theta_c': 0.0, 'theta_p': 0.0,
                 'vega_c': 0.0, 'vega_p': 0.0,
-                'rho_c': 0.0, 'rho_p': 0.0,
                 'iv_c': 0.0, 'iv_p': 0.0
             }
         records[strike]['openInterest_c'] = opt.get('openInterest', 0)
@@ -595,7 +594,6 @@ def parse_schwab_chain(chain_data):
         records[strike]['delta_c'] = opt.get('delta', 0.0)
         records[strike]['theta_c'] = opt.get('theta', 0.0)
         records[strike]['vega_c'] = opt.get('vega', 0.0)
-        records[strike]['rho_c'] = opt.get('rho', 0.0)
         vol = opt.get('volatility', opt.get('impliedVolatility', 0.0))
         records[strike]['iv_c'] = vol / 100.0 if vol > 2 else vol
 
@@ -611,7 +609,6 @@ def parse_schwab_chain(chain_data):
                 'delta_c': 0.0, 'delta_p': 0.0,
                 'theta_c': 0.0, 'theta_p': 0.0,
                 'vega_c': 0.0, 'vega_p': 0.0,
-                'rho_c': 0.0, 'rho_p': 0.0,
                 'iv_c': 0.0, 'iv_p': 0.0
             }
         records[strike]['openInterest_p'] = opt.get('openInterest', 0)
@@ -619,7 +616,6 @@ def parse_schwab_chain(chain_data):
         records[strike]['delta_p'] = opt.get('delta', 0.0)
         records[strike]['theta_p'] = opt.get('theta', 0.0)
         records[strike]['vega_p'] = opt.get('vega', 0.0)
-        records[strike]['rho_p'] = opt.get('rho', 0.0)
         vol = opt.get('volatility', opt.get('impliedVolatility', 0.0))
         records[strike]['iv_p'] = vol / 100.0 if vol > 2 else vol
 
@@ -687,10 +683,6 @@ if not df_curr.empty and exp_0dte is not None:
     df_curr['put_vex'] = df_curr['vega_p'] * df_curr['openInterest_p'] * 100
     df_curr['net_vex'] = df_curr['call_vex'] + df_curr['put_vex']
 
-    df_curr['call_rex'] = df_curr['rho_c'] * df_curr['openInterest_c'] * 100
-    df_curr['put_rex'] = df_curr['rho_p'] * df_curr['openInterest_p'] * 100
-    df_curr['net_rex'] = df_curr['call_rex'] + df_curr['put_rex']
-
     # --- CÁLCULO DE CHARM & CHARM EXPOSURE (CHEX) ---
     r_rate = 0.045
     d1_charm = (np.log(spot_price / df_curr['strike']) + (r_rate + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
@@ -733,7 +725,6 @@ if not df_curr.empty and exp_0dte is not None:
     net_dex_total = float(df_curr['net_dex'].sum())
     net_tex_total = float(df_curr['net_tex'].sum())
     net_vex_total = float(df_curr['net_vex'].sum())
-    net_rex_total = float(df_curr['net_rex'].sum())
     net_chex_total = float(df_curr['net_chex'].sum())
 
     regime_str = "positive regime" if net_gex_total >= 0 else "negative regime"
@@ -749,7 +740,7 @@ else:
     net_gex_total = 0.0
     call_gex_sum, put_gex_sum, total_gex = 0.0, 0.0, 0.0
     call_oi_sum, put_oi_sum, total_oi_sum = 0, 0, 0
-    net_dex_total, net_tex_total, net_vex_total, net_rex_total, net_chex_total = 0.0, 0.0, 0.0, 0.0, 0.0
+    net_dex_total, net_tex_total, net_vex_total, net_chex_total = 0.0, 0.0, 0.0, 0.0
     regime_str = "neutral regime"
     condition_str = "Neutral"
     iv_str = "20.00%"
@@ -853,7 +844,7 @@ def consultar_ia_cache(
     call_oi_sum, put_oi_sum, total_oi_sum,
     cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
     iv_str, iv_rank_str, condition_str,
-    net_dex_total, net_tex_total, net_vex_total, net_rex_total, net_chex_total,
+    net_dex_total, net_tex_total, net_vex_total, net_chex_total,
     last_call_drift, last_put_drift, last_net_drift
 ):
     system_prompt = f"""
@@ -890,7 +881,6 @@ def consultar_ia_cache(
       * Delta Exposure (DEX): {net_dex_total:.2f}M USD
       * Theta Exposure (TEX): {net_tex_total:,.0f} USD/día
       * Vega Exposure (VEX): {net_vex_total:,.0f} USD/1% IV
-      * Rho Exposure (REX): {net_rex_total:,.0f} USD/1% Tasa
       * Charm Exposure (CHEX): {net_chex_total:.2f}M USD/día (Decaimiento de Delta por paso del tiempo)
     """
 
@@ -919,7 +909,6 @@ def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
     net_dex_val = float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0
     net_tex_val = float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0
     net_vex_val = float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0
-    net_rex_val = float(df_curr['net_rex'].sum()) if not df_curr.empty and 'net_rex' in df_curr.columns else 0.0
     net_chex_val = float(df_curr['net_chex'].sum()) if not df_curr.empty and 'net_chex' in df_curr.columns else 0.0
 
     return consultar_ia_cache(
@@ -928,7 +917,7 @@ def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
         call_oi_sum, put_oi_sum, total_oi_sum,
         cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
         iv_str, iv_rank_str, condition_str,
-        net_dex_val, net_tex_val, net_vex_val, net_rex_val, net_chex_val,
+        net_dex_val, net_tex_val, net_vex_val, net_chex_val,
         last_call_drift, last_put_drift, last_net_drift
     )
 
@@ -1055,14 +1044,13 @@ def export_snapshot_throttled():
 export_snapshot_throttled()
 
 # --- PESTAÑAS PRINCIPALES ---
-tab_gex, tab_live, tab_drift, tab_back, tab_data, tab_greeks, tab_3d = st.tabs([
+tab_gex, tab_live, tab_drift, tab_back, tab_data, tab_greeks = st.tabs([
     "GEX INFO",
     "LIVE GAMMA",
     "NET DRIFT",
     "BACKGAMMA",
     "DATA",
-    "GREEKS",
-    "SURFACE 3D"
+    "GREEKS"
 ])
 
 # --- 1. GEX INFO ---
@@ -1618,18 +1606,17 @@ with tab_data:
     with sub_dt2:
         if not df_curr.empty:
             st.dataframe(
-                df_curr[['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex', 'net_rex', 'net_chex']],
+                df_curr[['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex', 'net_chex']],
                 use_container_width=True,
                 height=600
             )
 
 # --- 6. GREEKS ---
 with tab_greeks:
-    sub_dex, sub_tex, sub_vex, sub_rex, sub_chex = st.tabs([
+    sub_dex, sub_tex, sub_vex, sub_chex = st.tabs([
         "DELTA EXPOSURE (DEX)",
         "THETA EXPOSURE (TEX)",
         "VEGA EXPOSURE (VEX)",
-        "RHO EXPOSURE (REX)",
         "CHARM EXPOSURE (CHEX)"
     ])
     
@@ -1708,31 +1695,6 @@ with tab_greeks:
             )
             st.plotly_chart(fig_vex, use_container_width=True)
 
-    with sub_rex:
-        if not df_curr.empty:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
-            x_mid = (x_min_raw + x_max_raw) / 2.0
-            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
-            x_min_val, x_max_val = x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)
-
-            fig_rex = go.Figure()
-            fig_rex.add_trace(go.Bar(
-                x=df_sub['strike'], y=df_sub['net_rex'],
-                name="Net REX ($)", marker_color='#10B981',
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net REX:</b> $%{y:,.0f}<extra></extra>"
-            ))
-            fig_rex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
-
-            fig_rex.update_layout(
-                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                title="Rho Exposure Total (REX - Sensibilidad $/1% Cambio en Tasa)",
-                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
-                yaxis=dict(title="REX ($/1% Tasa)", gridcolor="rgba(255,255,255,0.05)"),
-                height=560, margin=dict(l=50, r=40, t=50, b=40)
-            )
-            st.plotly_chart(fig_rex, use_container_width=True)
-
     with sub_chex:
         if not df_curr.empty:
             df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
@@ -1745,58 +1707,15 @@ with tab_greeks:
             fig_chex.add_trace(go.Bar(
                 x=df_sub['strike'], y=df_sub['net_chex'],
                 name="Net CHEX ($M)", marker_color='#EC4899',
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net CHEX:</b> $%{y:.2f}M/día<extra></extra>"
+                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net CHEX:</b> $%{y:.2f}M<extra></extra>"
             ))
             fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
 
             fig_chex.update_layout(
                 template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                title="Charm Exposure Total (CHEX - Sensibilidad de Delta por Paso del Tiempo $/día)",
+                title="Charm Exposure Total (CHEX - Delta Decay por Día)",
                 xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
                 yaxis=dict(title="CHEX ($ Millones/día)", gridcolor="rgba(255,255,255,0.05)"),
                 height=560, margin=dict(l=50, r=40, t=50, b=40)
             )
             st.plotly_chart(fig_chex, use_container_width=True)
-
-# --- 7. SURFACE 3D ---
-with tab_3d:
-    if Z_matrix_real.shape[1] > 1:
-        max_abs_gex = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
-
-        Z_surface_display = np.sign(Z_matrix_real) * (np.abs(Z_matrix_real / max_abs_gex) ** 0.45) * max_abs_gex
-
-        fig3 = go.Figure(data=[go.Surface(
-            x=full_timestamps,
-            y=fine_strikes,
-            z=Z_surface_display,
-            cmin=-max_abs_gex,
-            cmax=max_abs_gex,
-            colorscale=[
-                [0.0, '#EF4444'],
-                [0.35, '#2A1215'],
-                [0.5, '#06080D'],
-                [0.65, '#122A1E'],
-                [1.0, '#10B981']
-            ],
-            lighting=dict(ambient=0.6, diffuse=0.8, fresnel=0.2, specular=0.4, roughness=0.3),
-            contours=dict(z=dict(show=True, usecolormap=True, highlightcolor="#FFFFFF", project_z=True))
-        )])
-
-        fig3.update_layout(
-            template="plotly_dark",
-            paper_bgcolor='#06080D',
-            title="Superficie Intradía Continuada de Gamma Exposición (3D Continuous Surface)",
-            scene=dict(
-                xaxis_title='Hora',
-                yaxis_title='Strike ($)',
-                zaxis_title='Net GEX Amplificado ($)',
-                aspectratio=dict(x=1.6, y=1.2, z=0.6),
-                camera=dict(eye=dict(x=1.6, y=-1.6, z=1.0)),
-                xaxis=dict(gridcolor="#1E2433", backgroundcolor="#06080D"),
-                yaxis=dict(gridcolor="#1E2433", backgroundcolor="#06080D"),
-                zaxis=dict(gridcolor="#1E2433", backgroundcolor="#06080D")
-            ),
-            height=680,
-            margin=dict(l=20, r=20, t=50, b=20)
-        )
-        st.plotly_chart(fig3, use_container_width=True)
