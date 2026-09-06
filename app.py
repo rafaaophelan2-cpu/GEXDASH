@@ -68,7 +68,7 @@ def fetch_supabase_latest_snapshot(symbol="QQQ"):
     if not supabase:
         return None
     try:
-        res = supabase.table("gex_snapshots") \
+        res = supabase.table("gex_intraday") \
             .select("*") \
             .eq("symbol", symbol) \
             .order("created_at", desc=True) \
@@ -85,7 +85,7 @@ def fetch_supabase_gex_history(symbol="QQQ", limit=100):
     if not supabase:
         return []
     try:
-        res = supabase.table("gex_snapshots") \
+        res = supabase.table("gex_intraday") \
             .select("*") \
             .eq("symbol", symbol) \
             .order("created_at", desc=False) \
@@ -1365,7 +1365,7 @@ st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 def push_to_supabase_bg(snapshot_payload):
     if supabase:
         try:
-            supabase.table("gex_snapshots").insert(snapshot_payload).execute()
+            supabase.table("gex_intraday").insert(snapshot_payload).execute()
         except Exception as e:
             log_to_console("Supabase Async Snapshot Error", str(e))
 
@@ -1918,28 +1918,30 @@ with tab_greeks:
 # --- 5. BACKGAMMA ---
 with tab_back:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📜 HISTORIAL Y EVOLUCIÓN DE GEX (BACKGAMMA)</h3>", unsafe_allow_html=True)
-
-    hist_snaps = []
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📜 HISTORIAL BACKGAMMA</h3>", unsafe_allow_html=True)
+    st.info("Visualización e historial de sesiones anteriores registradas en Supabase / JSONBin.")
+    
     if supabase:
-        hist_snaps = fetch_supabase_gex_history(ticker_symbol, limit=200)
-
-    if hist_snaps:
-        df_hist = pd.DataFrame(hist_snaps)
-        if not df_hist.empty:
-            st.dataframe(df_hist, use_container_width=True)
-        else:
-            st.info("No hay datos de historial disponibles para este símbolo.")
+        try:
+            snaps_hist = fetch_supabase_gex_history(ticker_symbol, limit=100)
+            if snaps_hist:
+                df_hist_show = pd.DataFrame(snaps_hist)
+                st.dataframe(df_hist_show[['created_at', 'symbol', 'spot', 'net_gex']], use_container_width=True)
+            else:
+                st.write("No hay registros almacenados en el historial de Supabase.")
+        except Exception as e:
+            st.error(f"Error consultando historial: {e}")
     else:
-        st.info("No hay snapshots registrados en Supabase o el servicio está offline.")
+        st.warning("Supabase no está conectado.")
+        
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 6. DATA ---
 with tab_data:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>💾 DATOS EN VIVO Y TABLA DE OPCIONES</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📁 DATOS DE CONTRATOS Y OPCIONES</h3>", unsafe_allow_html=True)
     if not df_curr.empty:
         st.dataframe(df_curr, use_container_width=True)
     else:
-        st.warning("No hay datos de opciones disponibles actualmente.")
+        st.info("No hay datos de opciones disponibles.")
     st.markdown('</div>', unsafe_allow_html=True)
