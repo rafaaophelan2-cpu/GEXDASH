@@ -143,7 +143,7 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
     
     html, body, [class*="css"] {
-        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
         background-color: #06080D !important;
         color: #D1D5DB;
     }
@@ -316,6 +316,13 @@ st.markdown("""
         border: 1px solid rgba(59, 130, 246, 0.3);
         border-radius: 10px;
         padding: 20px;
+        margin-bottom: 20px;
+    }
+
+    .data-table-container {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        overflow: hidden;
         margin-bottom: 20px;
     }
     </style>
@@ -1283,7 +1290,7 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
        **2. Puntos Clave de Inflexión y Niveles Operativos**
        **3. Análisis de Flujo y Griegas (DEX, VEX, CHEX, VANNA, Net Drift)**
        **4. Escenario Más Probable y Proyección Estratégica** (indica si se prevé rango o expansión, zonas de rebote, pivote en Zero Gamma e invalidación).
-    3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$).
+    3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$). Usa fuentes y letras normales.
     """
 
     prompt_final = mensaje_usuario or f"Entrega un informe cuantitativo completo de opciones para {tipo_analisis} con los datos del mercado actual."
@@ -1684,7 +1691,6 @@ with tab_greeks:
         # 1. DELTA (DEX)
         with sub_grk1:
             if not df_grk_sub.empty and 'net_dex' in df_grk_sub.columns:
-                # NET PROFILE (Verde Calls / Positivo, Rojo Puts / Negativo)
                 fig_net_dex = go.Figure()
                 colors_net_dex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_dex']]
                 fig_net_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_dex'], marker_color=colors_net_dex, name="Net DEX"))
@@ -1694,7 +1700,6 @@ with tab_greeks:
 
                 st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-                # CALLS / PUTS (Cyan Claro #38BDF8 / Azul Oscuro #1E40AF)
                 fig_dex = go.Figure()
                 fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_dex'], name="Call DEX (+)", marker_color='#38BDF8'))
                 fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_dex'], name="Put DEX (-)", marker_color='#1E40AF'))
@@ -1705,7 +1710,6 @@ with tab_greeks:
         # 2. THETA (TEX)
         with sub_grk2:
             if not df_grk_sub.empty and 'net_tex' in df_grk_sub.columns:
-                # NET PROFILE
                 fig_net_tex = go.Figure()
                 colors_net_tex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_tex']]
                 fig_net_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_tex'], marker_color=colors_net_tex, name="Net TEX"))
@@ -1715,7 +1719,6 @@ with tab_greeks:
 
                 st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-                # CALLS / PUTS (Amarillo Claro #FDE047 / Marrón Oscuro #854D0E)
                 fig_tex = go.Figure()
                 fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_tex'], name="Call TEX (+)", marker_color='#FDE047'))
                 fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_tex'], name="Put TEX (-)", marker_color='#854D0E'))
@@ -1726,7 +1729,6 @@ with tab_greeks:
         # 3. VEGA (VEX)
         with sub_grk3:
             if not df_grk_sub.empty and 'net_vex' in df_grk_sub.columns:
-                # NET PROFILE
                 fig_net_vex = go.Figure()
                 colors_net_vex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vex']]
                 fig_net_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_vex'], marker_color=colors_net_vex, name="Net VEX"))
@@ -1736,7 +1738,6 @@ with tab_greeks:
 
                 st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-                # CALLS / PUTS (Turquesa Claro #5EEAD4 / Teal Oscuro #134E4A)
                 fig_vex = go.Figure()
                 fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vex'], name="Call VEX (+)", marker_color='#5EEAD4'))
                 fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vex'], name="Put VEX (-)", marker_color='#134E4A'))
@@ -1747,7 +1748,6 @@ with tab_greeks:
         # 4. CHARM (CHEX)
         with sub_grk4:
             if not df_grk_sub.empty and 'net_chex' in df_grk_sub.columns:
-                # NET PROFILE
                 fig_net_chex = go.Figure()
                 colors_net_chex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_chex']]
                 fig_net_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_chex'], marker_color=colors_net_chex, name="Net CHEX"))
@@ -1757,10 +1757,9 @@ with tab_greeks:
 
                 st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-                # CALLS / PUTS (Naranja Claro #FDBA74 / Óxido Oscuro #7C2D12)
                 fig_chex = go.Figure()
-                fig_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_chex'], name="Call CHEX (+)", marker_color='#FDBA74'))
-                fig_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_chex'], name="Put CHEX (-)", marker_color='#7C2D12'))
+                fig_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_chex'], name="Call CHEX (+)", marker_color='#A7F3D0'))
+                fig_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_chex'], name="Put CHEX (-)", marker_color='#065F46'))
                 if spot_price > 0: fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
                 fig_chex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Call vs Put Charm Exposure (CHEX) por Strike</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
                 st.plotly_chart(fig_chex, use_container_width=True)
@@ -1768,7 +1767,6 @@ with tab_greeks:
         # 5. VANNA (VANNA EX)
         with sub_grk5:
             if not df_grk_sub.empty and 'net_vanna' in df_grk_sub.columns:
-                # NET PROFILE
                 fig_net_vanna = go.Figure()
                 colors_net_vanna = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vanna']]
                 fig_net_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_vanna'], marker_color=colors_net_vanna, name="Net VANNA"))
@@ -1778,10 +1776,9 @@ with tab_greeks:
 
                 st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-                # CALLS / PUTS (Rosado Claro #F472B6 / Morado Oscuro #6B21A8)
                 fig_vanna = go.Figure()
-                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vanna'], name="Call Vanna (+)", marker_color='#F472B6'))
-                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vanna'], name="Put Vanna (-)", marker_color='#6B21A8'))
+                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vanna'], name="Call Vanna (+)", marker_color='#C084FC'))
+                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vanna'], name="Put Vanna (-)", marker_color='#581C87'))
                 if spot_price > 0: fig_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
                 fig_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Call vs Put Vanna Exposure por Strike</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
                 st.plotly_chart(fig_vanna, use_container_width=True)
@@ -1791,53 +1788,190 @@ with tab_greeks:
 # --- 5. BACKGAMMA ---
 with tab_back:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📜 HISTORIAL DE SNAPSHOTS Y ANÁLISIS RETROSPECTIVO</h3>", unsafe_allow_html=True)
-
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📜 HISTORIAL DE GAMMA & BACKTESTING SNAPSHOTS</h3>", unsafe_allow_html=True)
+    
     if jsonbin_history_data:
-        available_dates = sorted(list(jsonbin_history_data.keys()), reverse=True)
-        selected_date = st.selectbox("FECHA DE HISTORIAL", available_dates)
+        avail_dates = sorted(list(jsonbin_history_data.keys()), reverse=True)
+        sel_date = st.selectbox("Seleccionar Fecha Guardada en Nube", avail_dates)
         
-        snaps_for_date = jsonbin_history_data.get(selected_date, [])
-        if snaps_for_date:
-            times_list = [s.get("time") for s in snaps_for_date if isinstance(s, dict)]
-            selected_time = st.select_slider("HORA DEL SNAPSHOT", options=times_list)
+        if sel_date and sel_date in jsonbin_history_data:
+            day_snaps = jsonbin_history_data[sel_date]
+            st.info(f"Mostrando {len(day_snaps)} capturas registradas el {sel_date}.")
             
-            snap_selected = next((s for s in snaps_for_date if s.get("time") == selected_time), None)
-            if snap_selected:
-                s_spot = snap_selected.get("spot", 0.0)
-                s_net = snap_selected.get("net_gex", 0.0)
-                st.info(f"📍 Snapshot **{selected_date} {selected_time}** | Spot: **${s_spot:.2f}** | Net GEX Total: **{fmt_val(s_net)}**")
-                
-                s_strikes = snap_selected.get("strikes", [])
-                if s_strikes:
-                    df_snap = pd.DataFrame(s_strikes)
-                    colors_snap = ['#10B981' if v >= 0 else '#EF4444' for v in df_snap['net_gex']]
-                    
-                    fig_snap = go.Figure()
-                    fig_snap.add_trace(go.Bar(x=df_snap['strike'], y=df_snap['net_gex'], marker_color=colors_snap))
-                    fig_snap.add_vline(x=s_spot, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${s_spot:.2f})")
-                    fig_snap.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Perfil Net GEX Reconstruido</b>", xaxis=dict(title="Strike ($)"), height=420)
-                    st.plotly_chart(fig_snap, use_container_width=True)
+            times_hist = [s.get("time") for s in day_snaps]
+            spots_hist = [s.get("spot", 0.0) for s in day_snaps]
+            gex_hist = [s.get("net_gex", 0.0) for s in day_snaps]
+            
+            fig_back = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.6, 0.4])
+            fig_back.add_trace(go.Scatter(x=times_hist, y=spots_hist, mode='lines+markers', name='Spot Price', line=dict(color='#3B82F6', width=2)), row=1, col=1)
+            fig_back.add_trace(go.Bar(x=times_hist, y=gex_hist, name='Net GEX', marker_color=['#10B981' if v>=0 else '#EF4444' for v in gex_hist]), row=2, col=1)
+            
+            fig_back.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', height=500, margin=dict(l=50, r=40, t=30, b=30))
+            st.plotly_chart(fig_back, use_container_width=True)
     else:
-        st.warning("No hay datos de historial remoto disponibles en JSONBin.")
+        st.warning("No hay registros históricos almacenados en la nube actualmente.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 6. DATA ---
+# --- 6. DATA (SUBDIVIDIDO EN DATA SUMMARY Y DATA GRID) ---
 with tab_data:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📋 MATRIZ DE DATOS Y CADENA DE OPCIONES CÁLCULADA</h3>", unsafe_allow_html=True)
-
-    if not df_curr.empty:
-        st.dataframe(df_curr, use_container_width=True, height=500)
+    
+    # Subdivisión principal de la pestaña DATA
+    sub_data_summary, sub_data_grid = st.tabs(["DATA SUMMARY", "DATA GRID"])
+    
+    # --- SUBDIVISIÓN 1: DATA SUMMARY ---
+    with sub_data_summary:
+        st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.15rem; letter-spacing:0.5px;'>📋 RESUMEN DE NIVELES DEL DÍA Y ESTRUCTURA GEX</h3>", unsafe_allow_html=True)
+        st.caption("Consolidado cuantitativo de precios, volatilidad, niveles clave de Gamma Walls y pivote intradía.")
         
-        csv_data = df_curr.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Descargar Cadena Completa (CSV)",
-            data=csv_data,
-            file_name=f"gex_chain_{ticker_symbol}_{now_tz.strftime('%Y%m%d_%H%M')}.csv",
-            mime='text/csv',
-            use_container_width=True
+        # TABLA 1: NIVELES DEL DÍA Y MÉTRICAS CLAVE DE PRECIO
+        st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:700; font-size:0.88rem; color:#60A5FA; margin-bottom:8px;'>1. NIVELES DEL DÍA Y MÉTRICAS DE MERCADO</p>", unsafe_allow_html=True)
+        
+        high_day = max(full_spots) if full_spots else spot_price
+        low_day = min(full_spots) if full_spots else spot_price
+        open_day = full_spots[0] if full_spots else spot_price
+        
+        df_niveles_dia = pd.DataFrame([
+            {"Métrica / Nivel": "Symbol / Ticker", "Valor Intradía": ticker_symbol, "Detalle / Referencia": "Activo Subyacente Principal"},
+            {"Métrica / Nivel": "Precio Spot Actual", "Valor Intradía": f"${spot_price:.2f}", "Detalle / Referencia": "Cotización de Mercado en Tiempo Real"},
+            {"Métrica / Nivel": "Precio de Apertura (Open)", "Valor Intradía": f"${open_day:.2f}", "Detalle / Referencia": "Inicio de Sesión Regular"},
+            {"Métrica / Nivel": "Máximo del Día (High)", "Valor Intradía": f"${high_day:.2f}", "Detalle / Referencia": f"Rango Alto ({((high_day-spot_price)/spot_price*100):+.2f}%)"},
+            {"Métrica / Nivel": "Mínimo del Día (Low)", "Valor Intradía": f"${low_day:.2f}", "Detalle / Referencia": f"Rango Bajo ({((low_day-spot_price)/spot_price*100):+.2f}%)"},
+            {"Métrica / Nivel": "Ratio NQ / QQQ", "Valor Intradía": f"{conversion_ratio:.4f}", "Detalle / Referencia": "Factor Conversión Futuro / ETF"},
+            {"Métrica / Nivel": "Volatilidad Implícita (IV ATM)", "Valor Intradía": iv_str, "Detalle / Referencia": f"Percentil: {iv_rank_str}"},
+            {"Métrica / Nivel": "Net Premium Drift", "Valor Intradía": fmt_val(last_net_drift), "Detalle / Referencia": "Flujo Acumulado de Primas Neto"}
+        ])
+        
+        st.dataframe(
+            df_niveles_dia,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Métrica / Nivel": st.column_config.TextColumn("Métrica / Nivel", width="medium"),
+                "Valor Intradía": st.column_config.TextColumn("Valor Intradía", width="small"),
+                "Detalle / Referencia": st.column_config.TextColumn("Detalle / Referencia", width="large")
+            }
         )
-    else:
-        st.info("No hay datos de cadena disponibles para mostrar.")
+        
+        st.markdown("<div style='height:15px;'></div>", unsafe_allow_html=True)
+        
+        # TABLA 2: NIVELES GEX (GAMMA EXPOSURE & WALLS)
+        st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:700; font-size:0.88rem; color:#10B981; margin-bottom:8px;'>2. ESTRUCTURA DE NIVELES GEX Y ZONAS DE LIQUIDEZ</p>", unsafe_allow_html=True)
+        
+        df_niveles_gex = pd.DataFrame([
+            {"Nivel GEX": "Call Wall 1 (CW1)", "Strike ($)": f"${cw1:.0f}", "Distancia a Spot": f"{cw_diff:+.2f}%", "Función": "Resistencia Principal (Techo de Gamma)"},
+            {"Nivel GEX": "Call Wall 2 (CW2)", "Strike ($)": f"${cw2:.0f}", "Distancia a Spot": f"{((cw2-spot_price)/spot_price*100):+.2f}%", "Función": "Resistencia de Extensión Alcista"},
+            {"Nivel GEX": "Call Wall 3 (CW3)", "Strike ($)": f"${cw3:.0f}", "Distancia a Spot": f"{((cw3-spot_price)/spot_price*100):+.2f}%", "Función": "Resistencia Extrema"},
+            {"Nivel GEX": "Zero Gamma Level (Flip)", "Strike ($)": f"${zero_gamma:.2f}", "Distancia a Spot": f"{zg_diff:+.2f}%", "Función": "Pivote de Transición (Régimen Pos/Neg)"},
+            {"Nivel GEX": "Put Wall 1 (PW1)", "Strike ($)": f"${pw1:.0f}", "Distancia a Spot": f"{pw_diff:+.2f}%", "Función": "Soporte Principal (Suelo de Gamma)"},
+            {"Nivel GEX": "Put Wall 2 (PW2)", "Strike ($)": f"${pw2:.0f}", "Distancia a Spot": f"{((pw2-spot_price)/spot_price*100):+.2f}%", "Función": "Soporte de Extensión Bajista"},
+            {"Nivel GEX": "Put Wall 3 (PW3)", "Strike ($)": f"${pw3:.0f}", "Distancia a Spot": f"{((pw3-spot_price)/spot_price*100):+.2f}%", "Función": "Soporte Extremo"},
+            {"Nivel GEX": "Net Gamma Total", "Strike ($)": fmt_val(net_gex_total), "Distancia a Spot": regime_str.upper(), "Función": condition_str}
+        ])
+        
+        st.dataframe(
+            df_niveles_gex,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Nivel GEX": st.column_config.TextColumn("Nivel GEX", width="medium"),
+                "Strike ($)": st.column_config.TextColumn("Strike ($)", width="small"),
+                "Distancia a Spot": st.column_config.TextColumn("Distancia a Spot", width="small"),
+                "Función": st.column_config.TextColumn("Función / Comportamiento", width="large")
+            }
+        )
+        
+        st.markdown("<hr style='border-color:rgba(255,255,255,0.08); margin: 25px 0;'>", unsafe_allow_html=True)
+        
+        # REPORTE Y DIAGNÓSTICO ESTRATÉGICO CON IA
+        st.markdown("<h4 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.05rem; letter-spacing:0.5px;'>🧠 REPORTE Y DIAGNÓSTICO ESTRATÉGICO CON IA</h4>", unsafe_allow_html=True)
+        st.caption("Genera un análisis completo usando la información actual provista por el terminal.")
+        
+        if "data_summary_ai_report" not in st.session_state:
+            st.session_state.data_summary_ai_report = ""
+
+        col_btn_gen, col_btn_sp = st.columns([3, 7])
+        with col_btn_gen:
+            if st.button("⚡ GENERAR DIAGNÓSTICO DE MERCADO (IA)", key="btn_generate_summary_ai", use_container_width=True):
+                with st.spinner("Procesando matriz de datos y analizando estructura de mercado..."):
+                    reporte_res = consultar_ia(
+                        tipo_analisis="Resumen de Datos y Estrategia",
+                        mensaje_usuario="Genera el reporte cuantitativo y diagnóstico estratégico completo incorporando los niveles clave del día y perfiles GEX."
+                    )
+                    st.session_state.data_summary_ai_report = reporte_res
+
+        if st.session_state.data_summary_ai_report:
+            st.markdown("<div style='height:15px;'></div>", unsafe_allow_html=True)
+            st.markdown("<div class='data-summary-box'>", unsafe_allow_html=True)
+            st.markdown(st.session_state.data_summary_ai_report)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- SUBDIVISIÓN 2: DATA GRID ---
+    with sub_data_grid:
+        st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.15rem; letter-spacing:0.5px;'>📋 MATRIZ DE DATOS Y CADENA DE OPCIONES CALCULADA (DATA GRID)</h3>", unsafe_allow_html=True)
+        st.caption("Visualización de matriz completa de datos calculados por strike en tiempo real.")
+
+        if not df_curr.empty:
+            df_display = df_curr.copy()
+            
+            # Renombrar columnas para interfaz limpia y profesional
+            cols_map = {
+                'strike': 'Strike',
+                'openInterest_c': 'Call OI',
+                'openInterest_p': 'Put OI',
+                'call_gex': 'Call GEX ($)',
+                'put_gex': 'Put GEX ($)',
+                'net_gex': 'Net GEX ($)',
+                'call_dex': 'Call DEX ($M)',
+                'put_dex': 'Put DEX ($M)',
+                'net_dex': 'Net DEX ($M)',
+                'call_tex': 'Call TEX ($)',
+                'put_tex': 'Put TEX ($)',
+                'net_tex': 'Net TEX ($)',
+                'call_vex': 'Call VEX ($)',
+                'put_vex': 'Put VEX ($)',
+                'net_vex': 'Net VEX ($)',
+                'call_chex': 'Call CHEX ($M)',
+                'put_chex': 'Put CHEX ($M)',
+                'net_chex': 'Net CHEX ($M)',
+                'call_vanna': 'Call VANNA ($M)',
+                'put_vanna': 'Put VANNA ($M)',
+                'net_vanna': 'Net VANNA ($M)',
+                'iv_c': 'Call IV',
+                'iv_p': 'Put IV'
+            }
+            
+            df_display = df_display.rename(columns=cols_map)
+            
+            # Filtro por rango de strike en el grid
+            min_grid_stk = float(df_display['Strike'].min()) if 'Strike' in df_display.columns else 0.0
+            max_grid_stk = float(df_display['Strike'].max()) if 'Strike' in df_display.columns else 1000.0
+            
+            col_f1, col_f2, col_f3 = st.columns([3, 3, 4])
+            with col_f1:
+                stk_filter_min = st.number_input("Strike Mínimo", value=float(min_strike), step=1.0)
+            with col_f2:
+                stk_filter_max = st.number_input("Strike Máximo", value=float(max_strike), step=1.0)
+            with col_f3:
+                st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+                csv_data = df_display.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 EXPORTAR DATA GRID A CSV",
+                    data=csv_data,
+                    file_name=f"GEX_DataGrid_{ticker_symbol}_{now_tz.strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            df_filtered_grid = df_display[(df_display['Strike'] >= stk_filter_min) & (df_display['Strike'] <= stk_filter_max)]
+
+            st.dataframe(
+                df_filtered_grid,
+                use_container_width=True,
+                height=600,
+                hide_index=True
+            )
+        else:
+            st.info("No hay datos de opciones disponibles para mostrar en la Data Grid.")
+
     st.markdown('</div>', unsafe_allow_html=True)
