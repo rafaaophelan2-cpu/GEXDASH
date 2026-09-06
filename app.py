@@ -3,6 +3,7 @@ import json
 import time
 import requests
 import hashlib
+import threading
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -18,7 +19,7 @@ from supabase import create_client, Client
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="GEX Terminal Pro - Schwab", layout="wide", initial_sidebar_state="expanded")
 
-# --- MANEJO SEGURO DE SECRETOS (SIN CREDENCIALES HARDCODEADAS) ---
+# --- MANEJO SEGURO DE SECRETOS ---
 CLIENT_ID = st.secrets.get("CLIENT_ID", "")
 CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "")
 JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "")
@@ -321,13 +322,15 @@ def save_chat_message(role: str, content: str):
     cleaned_content = clean_ai_response(content) if role == "assistant" else content
     st.session_state.chat_messages.append({"role": role, "content": cleaned_content})
     if supabase:
-        try:
-            supabase.table("chat_messages").insert({
-                "role": role,
-                "content": cleaned_content
-            }).execute()
-        except Exception as e:
-            log_to_console("Supabase Chat Insert Error", e)
+        def push_chat_bg():
+            try:
+                supabase.table("chat_messages").insert({
+                    "role": role,
+                    "content": cleaned_content
+                }).execute()
+            except Exception as e:
+                log_to_console("Supabase Chat Insert Error", e)
+        threading.Thread(target=push_chat_bg, daemon=True).start()
 
 TOKEN_PATH = "schwab_token.json"
 
@@ -458,6 +461,15 @@ refresh_interval = st.sidebar.select_slider(
     disabled=not auto_refresh
 )
 
+# --- CORRECCIÓN BUG 1: AUTO-REFRESCO EN VIVO ACTIVO ---
+if auto_refresh:
+    try:
+        from streamlit_autorefresh import st_autorefresh
+        st_autorefresh(interval=refresh_interval * 1000, key="gex_auto_refresh")
+    except ImportError:
+        time.sleep(refresh_interval)
+        st.rerun()
+
 st.sidebar.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 if st.sidebar.button("🔄 ACTUALIZAR DATOS AHORA", use_container_width=True):
     st.cache_data.clear()
@@ -558,6 +570,7 @@ st.sidebar.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
+# --- CORRECCIÓN BUG 2: NORMALIZACIÓN ESTABLE DE VOLATILIDAD IMPLÍCITA ---
 def parse_schwab_chain(chain_data):
     if not isinstance(chain_data, dict):
         return pd.DataFrame(), None
@@ -575,6 +588,12 @@ def parse_schwab_chain(chain_data):
     
     records = {}
     
+    def extract_iv(opt_dict):
+        vol = float(opt_dict.get('volatility', opt_dict.get('impliedVolatility', 0.0)))
+        if vol > 2.0:
+            vol = vol / 100.0
+        return max(vol, 0.001)
+
     for strike_str, opt_list in calls_for_exp.items():
         if not opt_list: continue
         opt = opt_list[0]
@@ -594,8 +613,7 @@ def parse_schwab_chain(chain_data):
         records[strike]['delta_c'] = opt.get('delta', 0.0)
         records[strike]['theta_c'] = opt.get('theta', 0.0)
         records[strike]['vega_c'] = opt.get('vega', 0.0)
-        vol = opt.get('volatility', opt.get('impliedVolatility', 0.0))
-        records[strike]['iv_c'] = vol / 100.0 if vol > 2 else vol
+        records[strike]['iv_c'] = extract_iv(opt)
 
     for strike_str, opt_list in puts_for_exp.items():
         if not opt_list: continue
@@ -616,8 +634,7 @@ def parse_schwab_chain(chain_data):
         records[strike]['delta_p'] = opt.get('delta', 0.0)
         records[strike]['theta_p'] = opt.get('theta', 0.0)
         records[strike]['vega_p'] = opt.get('vega', 0.0)
-        vol = opt.get('volatility', opt.get('impliedVolatility', 0.0))
-        records[strike]['iv_p'] = vol / 100.0 if vol > 2 else vol
+        records[strike]['iv_p'] = extract_iv(opt)
 
     df = pd.DataFrame(list(records.values())).sort_values('strike').reset_index(drop=True)
     return df, selected_exp
@@ -660,14 +677,14 @@ if not df_curr.empty and exp_0dte is not None:
     days_to_exp = max((exp_dt - ref_today).days, 0)
     T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
 
-    near_atm = df_curr[abs(df_curr['strike'] - spot_price) <= (spot_price * 0.015)]
+    near_atm = df_curr[abs(df_curr['strike'] - spot_price) <= (spot_price * 0.025)]
     valid_ivs = []
     if not near_atm.empty:
         for _, r in near_atm.iterrows():
-            if 0.05 < r['iv_c'] < 2.0: valid_ivs.append(r['iv_c'])
-            if 0.05 < r['iv_p'] < 2.0: valid_ivs.append(r['iv_p'])
+            if 0.02 < r['iv_c'] < 3.0: valid_ivs.append(r['iv_c'])
+            if 0.02 < r['iv_p'] < 3.0: valid_ivs.append(r['iv_p'])
     atm_iv = float(np.median(valid_ivs)) if len(valid_ivs) > 0 else 0.20
-    atm_iv = max(atm_iv, 0.12)
+    atm_iv = max(atm_iv, 0.08)
 
     df_curr = recalculate_gex_for_spot(df_curr, spot_price, T_exp, atm_iv)
 
@@ -683,19 +700,20 @@ if not df_curr.empty and exp_0dte is not None:
     df_curr['put_vex'] = df_curr['vega_p'] * df_curr['openInterest_p'] * 100
     df_curr['net_vex'] = df_curr['call_vex'] + df_curr['put_vex']
 
-    # --- CÁLCULO DE CHARM & CHARM EXPOSURE (CHEX) ---
+    # --- CORRECCIÓN BUG 3: CHARM (CHEX) DIFERENCIADO SEGÚN PARIDAD DE OPCIÓN ---
     r_rate = 0.045
     d1_charm = (np.log(spot_price / df_curr['strike']) + (r_rate + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
     d2_charm = d1_charm - atm_iv * np.sqrt(T_exp)
-    charm_annual = - norm.pdf(d1_charm) * (r_rate / (atm_iv * np.sqrt(T_exp)) - d2_charm / (2 * T_exp))
     
-    # Decaimiento del Delta expresado por día (/365)
-    df_curr['charm_c'] = charm_annual / 365.0
-    df_curr['charm_p'] = charm_annual / 365.0
+    call_charm_annual = - norm.pdf(d1_charm) * (r_rate / (atm_iv * np.sqrt(T_exp)) - d2_charm / (2.0 * T_exp))
+    put_charm_annual = call_charm_annual + (r_rate * np.exp(-r_rate * T_exp) * norm.cdf(-d1_charm))
+
+    df_curr['charm_c'] = call_charm_annual / 365.0
+    df_curr['charm_p'] = put_charm_annual / 365.0
 
     df_curr['call_chex'] = df_curr['charm_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
     df_curr['put_chex'] = df_curr['charm_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
-    df_curr['net_chex'] = df_curr['call_chex'] + df_curr['put_chex']
+    df_curr['net_chex'] = df_curr['call_chex'] - df_curr['put_chex']
 
     calls_dominant = df_curr[df_curr['net_gex'] > 0].sort_values('net_gex', ascending=False)
     top_calls = calls_dominant['strike'].tolist()
@@ -746,14 +764,14 @@ else:
     iv_str = "20.00%"
     iv_rank_str = "N/A"
 
-# --- PREPARACIÓN TEMPORAL Y CÁLCULO GLOBAL DE NET DRIFT ---
+# --- CORRECCIÓN BUG 4: ZONA HORARIA Y FILTRADO INTRADÍA CORDENADO ---
 h_1m = fetch_history_schwab(ticker_symbol)
 
 if not h_1m.empty:
     h_1m = h_1m.tz_convert(tz_target)
     today_date_str = now_tz.strftime('%Y-%m-%d')
-    h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
     
+    h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
     if h_1m_today.empty:
         today_date_str = h_1m.index.max().strftime('%Y-%m-%d')
         h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
@@ -813,7 +831,7 @@ if not df_curr.empty and len(full_timestamps) > 0 and exp_0dte is not None:
     if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
         Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
 
-# --- CÁLCULO DE NET DRIFT GLOBAL PARA INYECCIÓN A LA IA ---
+# --- CÁLCULO DE NET DRIFT ---
 if len(full_timestamps) > 0:
     closes_drift = h_1m_reindexed['Close'].ffill().bfill().values if not h_1m_reindexed.empty else np.array(full_spots)
     vols_drift = h_1m_reindexed['Volume'].fillna(0).values if not h_1m_reindexed.empty else np.zeros(len(full_timestamps))
@@ -836,7 +854,7 @@ else:
     call_drift_raw, put_drift_raw, net_drift_raw = np.array([]), np.array([]), np.array([])
     last_call_drift, last_put_drift, last_net_drift = 0.0, 0.0, 0.0
 
-# --- ASISTENTE IA ENRIQUECIDO CON NET DRIFT Y CHARM ---
+# --- ASISTENTE IA ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def consultar_ia_cache(
     tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, conversion_ratio,
@@ -857,11 +875,6 @@ def consultar_ia_cache(
     - MANTÉN ESPACIOS NORMALES ENTRE PALABRAS: Nunca concatenes palabras sin espacios.
     - Para referirte a montos de dinero o precios, escribe la cifra seguida de 'USD' o 'dólares' (por ejemplo: 442.2K USD).
 
-    REGLA DE CONTEXTO OBLIGATORIA (NET DRIFT Y CHARM EXPOSURE):
-    Tienes acceso en tiempo real a las métricas de Net Drift y Charm Exposure calculadas dinámicamente. JAMÁS digas que no tienes acceso a ellas o que no ejecutas código externo.
-    * Definición de Net Drift: Mide la presión y flujo direccional acumulado de prima en opciones intradía (Calls Drift vs Puts Drift).
-    * Definición de Charm Exposure (CHEX): Mide la tasa de cambio del Delta por el paso del tiempo (Delta Decay por día). Muestra la presión de rebalanceo de cobertura que los creadores de mercado deben realizar al transcurrir el día sin cambios de precio.
-
     Métricas en tiempo real de Net Drift ({ticker_symbol}):
     - Call Drift Acumulado: {fmt_val(last_call_drift).replace('$', '')} USD
     - Put Drift Acumulado: {fmt_val(last_put_drift).replace('$', '')} USD
@@ -881,7 +894,7 @@ def consultar_ia_cache(
       * Delta Exposure (DEX): {net_dex_total:.2f}M USD
       * Theta Exposure (TEX): {net_tex_total:,.0f} USD/día
       * Vega Exposure (VEX): {net_vex_total:,.0f} USD/1% IV
-      * Charm Exposure (CHEX): {net_chex_total:.2f}M USD/día (Decaimiento de Delta por paso del tiempo)
+      * Charm Exposure (CHEX): {net_chex_total:.2f}M USD/día
     """
 
     prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado integrando los niveles GEX, Charm Exposure (CHEX) y el Net Drift intradía para {tipo_analisis}."
@@ -941,7 +954,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
 
     col_btn1, col_btn2 = st.columns(2)
     if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
-        with st.spinner("Analizando pre-market, Charm y Net Drift..."):
+        with st.spinner("Analizando pre-market..."):
             res = consultar_ia(
                 tipo_analisis="Pre-Market",
                 mensaje_usuario="Analiza la estructura Pre-Market integrando el régimen de Gamma, Charm Exposure (CHEX), niveles clave (Walls, Zero Gamma) y el comportamiento del Net Drift reciente."
@@ -949,10 +962,10 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
             save_chat_message("assistant", res)
 
     if col_btn2.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
-        with st.spinner("Analizando flujo intradía, Charm y Net Drift..."):
+        with st.spinner("Analizando flujo intradía..."):
             res = consultar_ia(
                 tipo_analisis="Mercado Intradía",
-                mensaje_usuario="Analiza el mercado intradía evaluando el flujo en vivo de Gamma, decaimiento de Charm (CHEX), la fuerza direccional del Net Drift (Calls vs Puts Drift) y los puntos de inflexión esperados."
+                mensaje_usuario="Analiza el mercado intradía evaluando el flujo en vivo de Gamma, decaimiento de Charm (CHEX), la fuerza direccional del Net Drift y los puntos de inflexión esperados."
             )
             save_chat_message("assistant", res)
 
@@ -990,56 +1003,74 @@ k8.markdown(f'<div class="metric-card"><div class="metric-label">Zero Gamma</div
 
 st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-# --- EXPORTACIÓN CONTROLADA A LA NUBE ---
+# --- CORRECCIÓN BUG 6 Y ALMACENAMIENTO DE SNAPSHOTS 1-MINUTO EN JSONBIN Y SUPABASE ---
+def push_to_jsonbin_bg(bin_id, api_key, date_key, snapshot_entry):
+    try:
+        url = f"https://api.jsonbin.io/v3/b/{bin_id}"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Master-Key": api_key
+        }
+        resp = requests.get(f"{url}/latest", headers=headers, timeout=3)
+        current_data = {}
+        if resp.status_code == 200:
+            record = resp.json().get("record", {})
+            if isinstance(record, dict):
+                current_data = record
+        
+        if date_key not in current_data or not isinstance(current_data[date_key], list):
+            current_data[date_key] = []
+        
+        existing_times = [s.get("time") for s in current_data[date_key] if isinstance(s, dict)]
+        if snapshot_entry["time"] not in existing_times:
+            current_data[date_key].append(snapshot_entry)
+            
+            # Mantiene los últimos 15 días acumulados
+            if len(current_data) > 15:
+                sorted_dates = sorted(list(current_data.keys()))
+                for old_d in sorted_dates[:-15]:
+                    del current_data[old_d]
+            
+            requests.put(url, json=current_data, headers=headers, timeout=4)
+    except Exception as e:
+        log_to_console("JSONBin Async Background Push", str(e))
+
 def export_snapshot_throttled():
+    if ticker_symbol != "QQQ":
+        return
+
     last_export = st.session_state.get("last_export_time", 0)
     current_time = time.time()
     
-    if current_time - last_export > 300 and spot_price > 0:
+    if current_time - last_export >= 60 and spot_price > 0 and not df_curr.empty:
         st.session_state.last_export_time = current_time
         
-        if supabase:
-            try:
-                snapshot_payload = {
-                    "symbol": ticker_symbol,
-                    "spot_price": float(spot_price),
-                    "conversion_ratio": float(conversion_ratio),
-                    "net_gex": float(net_gex_total),
-                    "total_gex": float(total_gex),
-                    "regime": regime_str,
-                    "cw1": float(cw1), "cw2": float(cw2), "cw3": float(cw3),
-                    "pw1": float(pw1), "pw2": float(pw2), "pw3": float(pw3),
-                    "zero_gamma": float(zero_gamma)
-                }
-                supabase.table("gex_snapshots").insert(snapshot_payload).execute()
-            except Exception as e:
-                log_to_console("Supabase Snapshot Export Error", e)
-
+        time_str = now_tz.strftime("%H:%M")
+        date_str = now_tz.strftime("%Y-%m-%d")
+        
+        strikes_payload = []
+        for _, r in df_curr.iterrows():
+            strikes_payload.append({
+                "strike": float(r['strike']),
+                "net_gex": float(r.get('net_gex', 0.0)),
+                "call_gex": float(r.get('call_gex', 0.0)),
+                "put_gex": float(r.get('put_gex', 0.0))
+            })
+        
+        snapshot_entry = {
+            "time": time_str,
+            "spot": float(spot_price),
+            "net_gex": float(net_gex_total),
+            "strikes": strikes_payload
+        }
+        
         if JSONBIN_BIN_ID and JSONBIN_API_KEY:
-            try:
-                url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
-                headers = {
-                    'Content-Type': 'application/json',
-                    'X-Master-Key': JSONBIN_API_KEY
-                }
-                export_payload = {
-                    "qqq_spot": float(spot_price),
-                    "conversion_ratio": float(conversion_ratio),
-                    "metrics": {
-                        "net_gex": net_gex_total,
-                        "net_gex_regime": regime_str,
-                        "total_gex": total_gex,
-                        "gamma_condition": condition_str,
-                        "iv_atm": iv_str,
-                        "iv_rank": iv_rank_str
-                    },
-                    "cw1": float(cw1), "cw2": float(cw2), "cw3": float(cw3),
-                    "pw1": float(pw1), "pw2": float(pw2), "pw3": float(pw3),
-                    "levels": df_curr[['strike', 'net_gex']].to_dict(orient='records') if not df_curr.empty else []
-                }
-                requests.put(url, json=export_payload, headers=headers, timeout=5)
-            except Exception as e:
-                log_to_console("JSONBin Export Error", e)
+            t = threading.Thread(
+                target=push_to_jsonbin_bg,
+                args=(JSONBIN_BIN_ID, JSONBIN_API_KEY, date_str, snapshot_entry),
+                daemon=True
+            )
+            t.start()
 
 export_snapshot_throttled()
 
@@ -1389,201 +1420,177 @@ with tab_drift:
         
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 4. BACKGAMMA ---
+# --- 4. BACKGAMMA (REPRODUCCIÓN Y SIMULACIÓN HISTÓRICA DESDE JSONBIN) ---
+@st.cache_data(ttl=20)
+def fetch_jsonbin_history(bin_id, api_key):
+    if not bin_id or not api_key:
+        return {}
+    try:
+        url = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
+        headers = {"X-Master-Key": api_key}
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            return resp.json().get("record", {})
+    except Exception as e:
+        log_to_console("JSONBin Read Error", str(e))
+    return {}
+
 with tab_back:
-    if "backtest_shift" not in st.session_state:
-        st.session_state.backtest_shift = 0
-
     st.markdown('<div class="backtest-controls">', unsafe_allow_html=True)
-    st.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.80rem; font-weight:800; color:#F0F6FC; letter-spacing:1px; margin-bottom:10px;'>⏮️ REPRODUCCIÓN & BACKTESTING DE GAMMA</p>", unsafe_allow_html=True)
+    st.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.80rem; font-weight:800; color:#F0F6FC; letter-spacing:1px; margin-bottom:10px;'>⏮️ REPRODUCCIÓN & BACKTESTING DE SNAPSHOTS (JSONBIN)</p>", unsafe_allow_html=True)
     
-    col_bt1, col_bt2, col_bt3 = st.columns([2, 1, 1])
-    with col_bt1:
-        bt_tf = st.selectbox("INTERVALO DE SALTO (MINUTOS)", [1, 5, 15, 30, 60], index=0, key="bt_tf_select")
-    with col_bt2:
-        st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-        if st.button("◀ Back", use_container_width=True, key="bt_back_btn"):
-            st.session_state.backtest_shift -= bt_tf
-    with col_bt3:
-        st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-        if st.button("Next ▶", use_container_width=True, key="bt_next_btn"):
-            st.session_state.backtest_shift += bt_tf
-            if st.session_state.backtest_shift > 0:
-                st.session_state.backtest_shift = 0
+    jsonbin_records = fetch_jsonbin_history(JSONBIN_BIN_ID, JSONBIN_API_KEY)
+    available_dates = sorted(list(jsonbin_records.keys()), reverse=True) if jsonbin_records else []
 
-    st.markdown('</div>', unsafe_allow_html=True)
+    if not available_dates:
+        st.warning("No hay fechas registradas en JSONBin. Los snapshots de 1 minuto comenzarán a guardarse automáticamente durante la sesión activa para QQQ.")
+    else:
+        col_bd1, col_bd2 = st.columns([2, 2])
+        with col_bd1:
+            selected_date = st.selectbox("FECHA A BACKTESTEAR", available_dates, key="bt_date_select")
+        with col_bd2:
+            bt_tf = st.selectbox("INTERVALO DE SALTO (TIMEFRAME)", [1, 5, 15, 30, 60], index=0, key="bt_tf_select")
 
-    total_len = len(full_timestamps)
-    if total_len > 0:
-        shift_idx = st.session_state.backtest_shift
-        target_len = max(1, min(total_len, total_len + shift_idx))
+        day_snaps = jsonbin_records.get(selected_date, [])
         
-        bt_timestamps = full_timestamps[:target_len]
-        bt_h_1m = h_1m_reindexed.iloc[:target_len] if not h_1m_reindexed.empty else pd.DataFrame()
-        bt_Z_matrix = Z_matrix_real[:, :target_len] if Z_matrix_real.shape[1] > 0 else Z_matrix_real
-    else:
-        bt_timestamps = full_timestamps
-        bt_h_1m = h_1m_reindexed
-        bt_Z_matrix = Z_matrix_real
+        if "bt_snap_index" not in st.session_state:
+            st.session_state.bt_snap_index = len(day_snaps) - 1 if day_snaps else 0
 
-    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    
-    if len(bt_timestamps) > 0:
-        current_bt_time = bt_timestamps[-1]
-        st.markdown(f"<p style='font-family:\"JetBrains Mono\"; color:#60A5FA; font-size:0.85rem; font-weight:700;'>⏱️ ESTADO DE BACKTEST | Hora Simulada: <span style='color:#F0F6FC;'>{current_bt_time}</span> (Desplazamiento: {st.session_state.backtest_shift} min)</p>", unsafe_allow_html=True)
+        col_bt1, col_bt2, col_bt3 = st.columns([2, 1, 1])
+        with col_bt1:
+            if day_snaps:
+                max_snap = len(day_snaps) - 1
+                if st.session_state.bt_snap_index > max_snap:
+                    st.session_state.bt_snap_index = max_snap
+                elif st.session_state.bt_snap_index < 0:
+                    st.session_state.bt_snap_index = 0
+                    
+                st.session_state.bt_snap_index = st.slider(
+                    "SNAPSHOTS DISPONIBLES",
+                    min_value=0,
+                    max_value=max_snap,
+                    value=st.session_state.bt_snap_index,
+                    format="Snap %d"
+                )
+        with col_bt2:
+            st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+            if st.button("◀ Back", use_container_width=True, key="bt_back_btn"):
+                st.session_state.bt_snap_index = max(0, st.session_state.bt_snap_index - bt_tf)
+                st.rerun()
+        with col_bt3:
+            st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+            if st.button("Next ▶", use_container_width=True, key="bt_next_btn"):
+                if day_snaps:
+                    st.session_state.bt_snap_index = min(len(day_snaps) - 1, st.session_state.bt_snap_index + bt_tf)
+                    st.rerun()
 
-    if len(bt_timestamps) > 0 and bt_Z_matrix.shape[1] > 0:
-        custom_hover_matrix = [[fmt_val(val) for val in row] for row in bt_Z_matrix]
-        max_real_abs = float(np.max(np.abs(bt_Z_matrix))) if np.max(np.abs(bt_Z_matrix)) > 0 else 1.0
-        Z_matrix_scaled = bt_Z_matrix / max_real_abs
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        fig_back = go.Figure()
+        if day_snaps:
+            sliced_snaps = day_snaps[:st.session_state.bt_snap_index + 1]
+            current_snap = sliced_snaps[-1]
 
-        fig_back.add_trace(go.Heatmap(
-            x=bt_timestamps,
-            y=fine_strikes,
-            z=Z_matrix_scaled,
-            customdata=custom_hover_matrix,
-            hovertemplate="<b>Hora:</b> %{x}<br><b>Strike:</b> $%{y:.2f}<br><b>Net Gamma Real:</b> %{customdata}<extra></extra>",
-            zsmooth='best', zmin=-1.0, zmax=1.0, zmid=0,
-            colorscale=[
-                [0.0, 'rgba(239, 68, 68, 0.9)'],
-                [0.4, 'rgba(239, 68, 68, 0.15)'],
-                [0.48, 'rgba(6, 8, 13, 0.0)'],
-                [0.52, 'rgba(6, 8, 13, 0.0)'],
-                [0.6, 'rgba(16, 185, 129, 0.15)'],
-                [1.0, 'rgba(16, 185, 129, 0.9)']
-            ],
-            colorbar=dict(title=dict(text="Net GEX ($)", side="top"), x=-0.05),
-            hoverlabel=dict(namelength=0)
-        ))
+            st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
+            st.markdown(f"<p style='font-family:\"JetBrains Mono\"; color:#60A5FA; font-size:0.85rem; font-weight:700;'>⏱️ ESTADO DE SIMULACIÓN | Hora: <span style='color:#F0F6FC;'>{current_snap.get('time', 'N/A')}</span> | Spot QQQ: <span style='color:#10B981;'>${current_snap.get('spot', 0.0):.2f}</span> | Net GEX: <span style='color:#F59E0B;'>{fmt_val(current_snap.get('net_gex', 0.0))}</span></p>", unsafe_allow_html=True)
 
-        raw_levels = []
-        if min_strike <= cw1 <= max_strike: raw_levels.append(('Call Wall 1', cw1, '#10B981', 'solid'))
-        if min_strike <= cw2 <= max_strike: raw_levels.append(('Call Wall 2', cw2, '#10B981', 'dash'))
-        if min_strike <= cw3 <= max_strike: raw_levels.append(('Call Wall 3', cw3, '#10B981', 'dot'))
-        if min_strike <= pw1 <= max_strike: raw_levels.append(('Put Wall 1', pw1, '#EF4444', 'solid'))
-        if min_strike <= pw2 <= max_strike: raw_levels.append(('Put Wall 2', pw2, '#EF4444', 'dash'))
-        if min_strike <= pw3 <= max_strike: raw_levels.append(('Put Wall 3', pw3, '#EF4444', 'dot'))
-        if min_strike <= zero_gamma <= max_strike: raw_levels.append(('Flip Level', zero_gamma, '#3B82F6', 'dot'))
+            bt_times = [s.get("time") for s in sliced_snaps]
+            bt_spots = [s.get("spot", 0.0) for s in sliced_snaps]
 
-        grouped_levels = {}
-        for label, val, color, dash in raw_levels:
-            key = round(val, 1)
-            if key not in grouped_levels: grouped_levels[key] = []
-            grouped_levels[key].append((label, color, dash))
-
-        for k_val, items in grouped_levels.items():
-            for label, color, dash in items:
-                fig_back.add_hline(y=k_val, line_color=color, line_width=0.8, line_dash=dash, layer="above")
-            labels_str = " / ".join([item[0] for item in items])
-            badge_text = f"<b>{labels_str}</b> (${k_val:.0f})"
-            main_color = items[0][1]
-            fig_back.add_annotation(
-                x=0.988, xref="paper", y=k_val, yref="y", text=badge_text, showarrow=False,
-                xanchor="right", yanchor="middle", font=dict(family="JetBrains Mono", size=10, color=main_color),
-                bgcolor="#090D16", bordercolor=main_color, borderwidth=1, borderpad=3, opacity=0.95
-            )
-
-        if not bt_h_1m.empty:
-            fig_back.add_trace(go.Candlestick(
-                x=bt_timestamps,
-                open=bt_h_1m['Open'],
-                high=bt_h_1m['High'],
-                low=bt_h_1m['Low'],
-                close=bt_h_1m['Close'],
-                name="Spot Price",
-                increasing_line_color='#10B981',
-                decreasing_line_color='#EF4444',
-                increasing_fillcolor='#10B981',
-                decreasing_fillcolor='#EF4444',
-                hovertemplate="<b>Hora:</b> %{x}<br><b>Apertura:</b> $%{open:.2f}<br><b>Máximo:</b> $%{high:.2f}<br><b>Mínimo:</b> $%{low:.2f}<br><b>Cierre:</b> $%{close:.2f}<extra></extra>"
-            ))
-
-        fig_back.update_layout(
-            template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-            uirevision="static_user_state",
-            xaxis_title=f"Hora Intradía Rebobinada ({tz_choice.split(' ')[0]})", yaxis_title="Precio / Strike ($)",
-            height=680, dragmode='pan', hovermode="closest", xaxis_rangeslider_visible=False,
-            margin=dict(l=80, r=60, t=40, b=40), yaxis=dict(dtick=1, side='right'),
-            hoverlabel=dict(bgcolor="#161B22", bordercolor="#30363D", font_size=12, font_family="JetBrains Mono", namelength=0)
-        )
-
-        st.plotly_chart(fig_back, use_container_width=True, config={'scrollZoom': True}, key="heatmap_backtest")
-
-        if not df_curr.empty:
-            st.markdown("<hr style='border-color:rgba(255,255,255,0.08); margin: 25px 0;'>", unsafe_allow_html=True)
+            all_strikes_set = set()
+            for s in sliced_snaps:
+                for st_item in s.get("strikes", []):
+                    all_strikes_set.add(st_item["strike"])
             
-            bt_spot_val = bt_h_1m['Close'].dropna().iloc[-1] if (not bt_h_1m.empty and 'Close' in bt_h_1m and len(bt_h_1m['Close'].dropna()) > 0) else spot_price
+            sorted_bt_strikes = sorted(list(all_strikes_set)) if all_strikes_set else np.linspace(min_strike, max_strike, 20).tolist()
+            
+            bt_Z_matrix = np.zeros((len(sorted_bt_strikes), len(sliced_snaps)))
+            strike_to_idx = {k: i for i, k in enumerate(sorted_bt_strikes)}
 
-            df_curr_bt = recalculate_gex_for_spot(df_curr, bt_spot_val, T_exp, atm_iv)
+            for t_i, s in enumerate(sliced_snaps):
+                for st_item in s.get("strikes", []):
+                    st_val = st_item["strike"]
+                    if st_val in strike_to_idx:
+                        bt_Z_matrix[strike_to_idx[st_val], t_i] = st_item.get("net_gex", 0.0)
 
-            df_sub_bt = df_curr_bt[(df_curr_bt['strike'] >= min_strike) & (df_curr_bt['strike'] <= max_strike)].copy()
-            colors_bt = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub_bt['net_gex']]
+            if bt_Z_matrix.size > 0 and bt_Z_matrix.shape[1] > 1:
+                bt_Z_matrix = gaussian_filter(bt_Z_matrix, sigma=(0.5, 0.8))
 
-            x_min_raw, x_max_raw = df_sub_bt['strike'].min(), df_sub_bt['strike'].max()
-            x_mid = (x_min_raw + x_max_raw) / 2.0
-            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
-            x_min_val = x_mid - (x_half_span * 2.0)
-            x_max_val = x_mid + (x_half_span * 2.0)
+            max_abs_bt = float(np.max(np.abs(bt_Z_matrix))) if np.max(np.abs(bt_Z_matrix)) > 0 else 1.0
+            bt_Z_scaled = bt_Z_matrix / max_abs_bt
 
-            y_max_val = df_sub_bt['net_gex'].max()
-            y_min_val = df_sub_bt['net_gex'].min()
-            y_max_adj = (max(y_max_val, 0) * 1.8) if y_max_val > 0 else 1000
-            y_min_adj = (min(y_min_val, 0) * 1.8) if y_min_val < 0 else -1000
+            custom_hover_bt = [[fmt_val(val) for val in row] for row in bt_Z_matrix]
 
-            fig_bt_profile = go.Figure()
-            fig_bt_profile.add_trace(go.Bar(
-                x=df_sub_bt['strike'],
-                y=df_sub_bt['net_gex'],
-                orientation='v',
-                marker_color=colors_bt,
-                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net GEX Recomputado:</b> %{customdata}<extra></extra>",
-                customdata=[fmt_val(v) for v in df_sub_bt['net_gex']]
+            fig_bt_heat = go.Figure()
+            fig_bt_heat.add_trace(go.Heatmap(
+                x=bt_times,
+                y=sorted_bt_strikes,
+                z=bt_Z_scaled,
+                customdata=custom_hover_bt,
+                hovertemplate="<b>Hora Simulada:</b> %{x}<br><b>Strike:</b> $%{y:.2f}<br><b>Net Gamma Registrado:</b> %{customdata}<extra></extra>",
+                zsmooth='best', zmin=-1.0, zmax=1.0, zmid=0,
+                colorscale=[
+                    [0.0, 'rgba(239, 68, 68, 0.9)'],
+                    [0.4, 'rgba(239, 68, 68, 0.15)'],
+                    [0.48, 'rgba(6, 8, 13, 0.0)'],
+                    [0.52, 'rgba(6, 8, 13, 0.0)'],
+                    [0.6, 'rgba(16, 185, 129, 0.15)'],
+                    [1.0, 'rgba(16, 185, 129, 0.9)']
+                ],
+                colorbar=dict(title=dict(text="Net GEX ($)", side="top"), x=-0.05)
             ))
 
-            fig_bt_profile.add_vline(
-                x=bt_spot_val,
-                line_color="#3B82F6",
-                line_width=1.5,
-                line_dash="dash",
-                annotation_text=f"Spot: ${bt_spot_val:.2f}",
-                annotation_position="top",
-                annotation_font=dict(color="#60A5FA", size=11, family="JetBrains Mono")
+            fig_bt_heat.add_trace(go.Scatter(
+                x=bt_times,
+                y=bt_spots,
+                mode='lines+markers',
+                name='QQQ Spot Real',
+                line=dict(color='#3B82F6', width=2),
+                marker=dict(size=4, color='#60A5FA')
+            ))
+
+            fig_bt_heat.update_layout(
+                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                title=f"<b>LIVE GAMMA REPLAY ({selected_date})</b>",
+                xaxis_title="Hora Intradía Registrada", yaxis_title="Strike / Precio ($)",
+                height=560, margin=dict(l=80, r=60, t=40, b=40), yaxis=dict(dtick=2, side='right')
             )
 
-            fig_bt_profile.update_layout(
-                template="plotly_dark",
-                plot_bgcolor='#06080D',
-                paper_bgcolor='#06080D',
-                title=dict(
-                    text=f"<b>Strike Profile Dynamic (Net Gamma Exposure @ ${bt_spot_val:.2f})</b>",
-                    font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")
-                ),
-                xaxis=dict(
-                    title="Strike ($)",
-                    gridcolor="rgba(255,255,255,0.05)",
-                    tickfont=dict(family="JetBrains Mono", color="#8B949E"),
-                    zeroline=False,
-                    range=[x_min_val, x_max_val]
-                ),
-                yaxis=dict(
-                    title="Net GEX ($)",
-                    gridcolor="rgba(255,255,255,0.05)",
-                    tickfont=dict(family="JetBrains Mono", color="#8B949E"),
-                    zeroline=True,
-                    zerolinecolor="rgba(255,255,255,0.15)",
-                    zerolinewidth=1,
-                    range=[y_min_adj, y_max_adj]
-                ),
-                height=500,
-                margin=dict(l=50, r=40, t=50, b=40)
-            )
-            st.plotly_chart(fig_bt_profile, use_container_width=True, key="profile_backtest")
-    else:
-        st.info("Sin datos para la simulación.")
+            st.plotly_chart(fig_bt_heat, use_container_width=True, key="heatmap_backtest_jsonbin")
 
-    st.markdown('</div>', unsafe_allow_html=True)
+            # --- NET GEX PROFILE EN ESE MOMENTO SIMULADO ---
+            curr_strikes = current_snap.get("strikes", [])
+            if curr_strikes:
+                df_bt_prof = pd.DataFrame(curr_strikes).sort_values("strike")
+                colors_bt_prof = ['#10B981' if v >= 0 else '#EF4444' for v in df_bt_prof['net_gex']]
+
+                fig_bt_prof = go.Figure()
+                fig_bt_prof.add_trace(go.Bar(
+                    x=df_bt_prof['strike'],
+                    y=df_bt_prof['net_gex'],
+                    marker_color=colors_bt_prof,
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net GEX Registrado:</b> %{customdata}<extra></extra>",
+                    customdata=[fmt_val(v) for v in df_bt_prof['net_gex']]
+                ))
+
+                fig_bt_prof.add_vline(
+                    x=current_snap.get("spot", 0.0),
+                    line_color="#3B82F6",
+                    line_width=1.5,
+                    line_dash="dash",
+                    annotation_text=f"Spot (${current_snap.get('spot', 0.0):.2f})",
+                    annotation_position="top"
+                )
+
+                fig_bt_prof.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title=f"<b>NET GEX PROFILE EN EL MINUTO {current_snap.get('time')}</b>",
+                    xaxis_title="Strike ($)", yaxis_title="Net GEX ($)",
+                    height=450, margin=dict(l=50, r=40, t=50, b=40)
+                )
+
+                st.plotly_chart(fig_bt_prof, use_container_width=True, key="profile_backtest_jsonbin")
+
+            st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 5. DATA ---
 with tab_data:
