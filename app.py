@@ -328,42 +328,59 @@ def login_user(username_in, password_in):
     user_clean = username_in.strip().lower()
     pass_clean = password_in.strip()
     
+    if not user_clean or not pass_clean:
+        return False, "Por favor ingresa un usuario y contraseña válidos."
+
+    # 1. Intento via Supabase
     if supabase:
         try:
             pass_hash = hashlib.sha256(pass_clean.encode('utf-8')).hexdigest()
             res = supabase.table("app_users") \
                 .select("*") \
                 .eq("username", user_clean) \
-                .eq("password_hash", pass_hash) \
                 .execute()
                 
             if res.data and len(res.data) > 0:
-                st.session_state.authenticated = True
-                st.session_state.user_email = res.data[0].get('username', user_clean)
+                user_record = res.data[0]
+                db_hash = str(user_record.get('password_hash', '')).strip()
                 
-                try:
-                    supabase.table("active_sessions").upsert({
-                        "username": user_clean,
-                        "ip_address": "streamlit_cloud",
-                        "session_token": st.session_state.get("session_id", "active"),
-                        "last_seen": datetime.now().isoformat()
-                    }).execute()
-                except Exception as e_sess:
-                    log_to_console("Active Sessions Upsert Error", str(e_sess))
+                # Permite validación por hash SHA256 o texto plano por retrocompatibilidad
+                if db_hash == pass_hash or db_hash == pass_clean:
+                    st.session_state.authenticated = True
+                    st.session_state.user_email = user_record.get('username', user_clean)
                     
-                return True, f"Bienvenido {res.data[0].get('name', user_clean)}"
+                    try:
+                        supabase.table("active_sessions").upsert({
+                            "username": user_clean,
+                            "ip_address": "streamlit_cloud",
+                            "session_token": st.session_state.get("session_id", "active"),
+                            "last_seen": datetime.now().isoformat()
+                        }).execute()
+                    except Exception as e_sess:
+                        log_to_console("Active Sessions Upsert Error", str(e_sess))
+                        
+                    return True, f"Bienvenido {user_record.get('name', user_clean)}"
         except Exception as e:
             log_to_console("Supabase Login Error", str(e))
 
+    # 2. Intento via st.secrets [USERS]
     valid_users = st.secrets.get("USERS", {})
-    if isinstance(valid_users, dict):
-        users_lower = {str(k).strip().lower(): str(v).strip() for k, v in valid_users.items()}
-        if user_clean in users_lower and users_lower[user_clean] == pass_clean:
-            st.session_state.authenticated = True
-            st.session_state.user_email = user_clean
-            return True, "Inicio de sesión exitoso."
+    if valid_users:
+        try:
+            users_lower = {str(k).strip().lower(): str(v).strip() for k, v in valid_users.items()}
+            if user_clean in users_lower and users_lower[user_clean] == pass_clean:
+                st.session_state.authenticated = True
+                st.session_state.user_email = user_clean
+                return True, "Inicio de sesión exitoso."
+        except Exception as e_sec:
+            log_to_console("Secrets USERS Login Error", str(e_sec))
 
-    if not valid_users and user_clean in ["admin", "trader"] and pass_clean in ["admin123", "gex2026"]:
+    # 3. Credenciales de respaldo para desarrollo
+    dev_users = {
+        "admin": "admin123",
+        "trader": "gex2026"
+    }
+    if user_clean in dev_users and dev_users[user_clean] == pass_clean:
         st.session_state.authenticated = True
         st.session_state.user_email = user_clean
         return True, "Inicio de sesión en modo desarrollo."
@@ -383,8 +400,8 @@ if not st.session_state.authenticated:
         """, unsafe_allow_html=True)
         
         with st.form("login_form"):
-            email_in = st.text_input("Usuario", value="admin")
-            pass_in = st.text_input("Contraseña", type="password", value="admin123")
+            email_in = st.text_input("Usuario", value="")
+            pass_in = st.text_input("Contraseña", type="password", value="")
             btn_login = st.form_submit_button("INGRESAR AL TERMINAL", use_container_width=True)
             
             if btn_login:
@@ -1414,13 +1431,12 @@ def export_snapshot_throttled():
 export_snapshot_throttled()
 
 # --- PESTAÑAS PRINCIPALES ---
-tab_gex, tab_live, tab_drift, tab_back, tab_data, tab_greeks = st.tabs([
+tab_gex, tab_live, tab_drift, tab_back, tab_data = st.tabs([
     "GEX INFO",
     "LIVE GAMMA",
     "NET DRIFT",
     "BACKGAMMA",
-    "DATA",
-    "GREEKS"
+    "DATA"
 ])
 
 # --- 1. GEX INFO ---
@@ -1899,132 +1915,7 @@ with tab_back:
 
 # --- 5. DATA ---
 with tab_data:
-    sub_dt1, sub_dt2 = st.tabs(["TODAY'S DATA", "DATA GRID"])
-    
-    with sub_dt1:
-        st.markdown(f"""
-        <div class="depth-frame">
-            <h3 style="margin-top:0; margin-bottom: 16px; color: #F0F6FC; font-size: 1.1rem; font-weight: 700;">Gamma Regime & Volatility Summary</h3>
-            <ul style="list-style-type: disc; margin: 0; padding-left: 20px; color: #C9D1D9; font-size: 0.90rem; line-height: 2.1; font-family: 'JetBrains Mono', monospace;">
-                <li><b>Net GEX:</b> <span style="color: {'#10B981' if net_gex_total >= 0 else '#EF4444'}; font-weight: 700;">{fmt_val(net_gex_total)}</span> ({regime_str})</li>
-                <li><b>Total GEX:</b> <span style="color: #F0F6FC; font-weight: 700;">{fmt_val(total_gex, show_sign=False)}</span></li>
-                <li><b>Gamma Condition:</b> <span style="color: #8B949E;">{condition_str}</span></li>
-                <li><b>IV (ATM / 0DTE):</b> <span style="color: #60A5FA; font-weight: 700;">{iv_str}</span></li>
-                <li><b>IV Rank:</b> <span style="color: #8B949E;">{iv_rank_str}</span></li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with sub_dt2:
-        if not df_curr.empty:
-            cols_to_display = [col for col in ['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex', 'net_chex'] if col in df_curr.columns]
-            st.dataframe(
-                df_curr[cols_to_display],
-                use_container_width=True,
-                height=600
-            )
-
-# --- 6. GREEKS ---
-with tab_greeks:
-    sub_dex, sub_tex, sub_vex, sub_chex = st.tabs([
-        "DELTA EXPOSURE (DEX)",
-        "THETA EXPOSURE (TEX)",
-        "VEGA EXPOSURE (VEX)",
-        "CHARM EXPOSURE (CHEX)"
-    ])
-    
-    with sub_dex:
-        if not df_curr.empty and 'strike' in df_curr.columns:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            if not df_sub.empty:
-                xaxis_kwargs = safe_strike_range(df_sub)
-
-                fig_dex = go.Figure()
-                fig_dex.add_trace(go.Bar(
-                    x=df_sub['strike'], y=df_sub['net_dex'],
-                    name="Net DEX ($M)", marker_color='#3B82F6',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net DEX:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_dex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})", annotation_position="top")
-
-                fig_dex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="Delta Exposure Total (DEX) por Strike ($ Millones)",
-                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
-                    yaxis=dict(title="DEX ($ Millones)", gridcolor="rgba(255,255,255,0.05)"),
-                    height=560, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_dex, use_container_width=True)
-
-    with sub_tex:
-        if not df_curr.empty and 'strike' in df_curr.columns:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            if not df_sub.empty:
-                xaxis_kwargs = safe_strike_range(df_sub)
-
-                fig_tex = go.Figure()
-                fig_tex.add_trace(go.Bar(
-                    x=df_sub['strike'], y=df_sub['net_tex'],
-                    name="Net TEX ($)", marker_color='#F59E0B',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net TEX:</b> $%{y:,.0f}<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_tex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})", annotation_position="top")
-
-                fig_tex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="Theta Exposure Total (TEX) por Strike ($/día)",
-                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
-                    yaxis=dict(title="TEX ($/día)", gridcolor="rgba(255,255,255,0.05)"),
-                    height=560, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_tex, use_container_width=True)
-
-    with sub_vex:
-        if not df_curr.empty and 'strike' in df_curr.columns:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            if not df_sub.empty:
-                xaxis_kwargs = safe_strike_range(df_sub)
-
-                fig_vex = go.Figure()
-                fig_vex.add_trace(go.Bar(
-                    x=df_sub['strike'], y=df_sub['net_vex'],
-                    name="Net VEX ($)", marker_color='#8B5CF6',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net VEX:</b> $%{y:,.0f}<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_vex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})", annotation_position="top")
-
-                fig_vex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="Vega Exposure Total (VEX) por Strike ($/1% IV)",
-                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
-                    yaxis=dict(title="VEX ($/1% IV)", gridcolor="rgba(255,255,255,0.05)"),
-                    height=560, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_vex, use_container_width=True)
-
-    with sub_chex:
-        if not df_curr.empty and 'strike' in df_curr.columns:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            if not df_sub.empty:
-                xaxis_kwargs = safe_strike_range(df_sub)
-
-                fig_chex = go.Figure()
-                fig_chex.add_trace(go.Bar(
-                    x=df_sub['strike'], y=df_sub['net_chex'],
-                    name="Net CHEX ($M)", marker_color='#EC4899',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net CHEX:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})", annotation_position="top")
-
-                fig_chex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="Charm Exposure Total (CHEX) por Strike ($M/día)",
-                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
-                    yaxis=dict(title="CHEX ($M/día)", gridcolor="rgba(255,255,255,0.05)"),
-                    height=560, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_chex, use_container_width=True)
+    if not df_curr.empty:
+        st.dataframe(df_curr, use_container_width=True)
+    else:
+        st.info("No hay datos de opciones disponibles actualmente.")
