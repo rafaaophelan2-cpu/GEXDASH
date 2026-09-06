@@ -16,6 +16,12 @@ import schwab
 from google import genai
 from supabase import create_client, Client
 
+# --- IMPORTACIÓN SEGURA DE AUTOREFRESH ---
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    st_autorefresh = None
+
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="GEX Terminal Pro - Schwab", layout="wide", initial_sidebar_state="expanded")
 
@@ -512,11 +518,10 @@ refresh_interval = st.sidebar.select_slider(
 )
 
 if auto_refresh:
-    try:
-        from streamlit_autorefresh import st_autorefresh
-        st_autorefresh(interval=refresh_interval * 1000, key=f"gex_auto_refresh_{refresh_interval}")
-    except ImportError:
-        st.sidebar.warning("⚠️ Instala `streamlit-autorefresh` para habilitar el refresco dinámico sin bloqueos.")
+    if st_autorefresh is not None:
+        st_autorefresh(interval=refresh_interval * 1000, key="gex_auto_refresh_counter")
+    else:
+        st.sidebar.warning("⚠️ Instala `streamlit-autorefresh` añadiéndolo a tu `requirements.txt` o ejecutando `pip install streamlit-autorefresh`.")
 
 st.sidebar.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 if st.sidebar.button("🔄 ACTUALIZAR DATOS AHORA", use_container_width=True):
@@ -1847,99 +1852,3 @@ with tab_greeks:
         "VEGA EXPOSURE (VEX)",
         "CHARM EXPOSURE (CHEX)"
     ])
-    
-    with sub_dex:
-        if not df_curr.empty and 'strike' in df_curr.columns:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            if not df_sub.empty:
-                xaxis_kwargs = safe_strike_range(df_sub)
-
-                fig_dex = go.Figure()
-                fig_dex.add_trace(go.Bar(
-                    x=df_sub['strike'], y=df_sub['net_dex'],
-                    name="Net DEX ($M)", marker_color='#3B82F6',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net DEX:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_dex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})", annotation_position="top")
-
-                fig_dex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="Delta Exposure Total (DEX) por Strike ($ Millones)",
-                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
-                    yaxis=dict(title="DEX ($ Millones)", gridcolor="rgba(255,255,255,0.05)"),
-                    height=560, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_dex, use_container_width=True)
-
-    with sub_tex:
-        if not df_curr.empty and 'strike' in df_curr.columns:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            if not df_sub.empty:
-                xaxis_kwargs = safe_strike_range(df_sub)
-
-                fig_tex = go.Figure()
-                fig_tex.add_trace(go.Bar(
-                    x=df_sub['strike'], y=df_sub['net_tex'],
-                    name="Net TEX ($)", marker_color='#F59E0B',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net TEX:</b> $%{y:,.0f}<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_tex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})", annotation_position="top")
-
-                fig_tex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="Theta Exposure Total (TEX - Pérdida por Decaimiento Temporal $/día)",
-                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
-                    yaxis=dict(title="TEX ($/día)", gridcolor="rgba(255,255,255,0.05)"),
-                    height=560, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_tex, use_container_width=True)
-
-    with sub_vex:
-        if not df_curr.empty and 'strike' in df_curr.columns:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            if not df_sub.empty:
-                xaxis_kwargs = safe_strike_range(df_sub)
-
-                fig_vex = go.Figure()
-                fig_vex.add_trace(go.Bar(
-                    x=df_sub['strike'], y=df_sub['net_vex'],
-                    name="Net VEX ($)", marker_color='#8B5CF6',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net VEX:</b> $%{y:,.0f}<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_vex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})", annotation_position="top")
-
-                fig_vex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="Vega Exposure Total (VEX - Sensibilidad $/1% Cambio en IV)",
-                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
-                    yaxis=dict(title="VEX ($/1% IV)", gridcolor="rgba(255,255,255,0.05)"),
-                    height=560, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_vex, use_container_width=True)
-
-    with sub_chex:
-        if not df_curr.empty and 'strike' in df_curr.columns:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-            if not df_sub.empty:
-                xaxis_kwargs = safe_strike_range(df_sub)
-
-                fig_chex = go.Figure()
-                fig_chex.add_trace(go.Bar(
-                    x=df_sub['strike'], y=df_sub['net_chex'],
-                    name="Net CHEX ($M)", marker_color='#EC4899',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net CHEX:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})", annotation_position="top")
-
-                fig_chex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="Charm Exposure Total (CHEX - Cambio de Delta por Paso del Tiempo $M/día)",
-                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
-                    yaxis=dict(title="CHEX ($M/día)", gridcolor="rgba(255,255,255,0.05)"),
-                    height=560, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_chex, use_container_width=True)
