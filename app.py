@@ -1945,9 +1945,9 @@ with tab_greeks:
 
                 fig_chex.update_layout(
                     template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="Charm Exposure Total (CHEX - Delta Decay por Día)",
+                    title="Charm Exposure Total (CHEX - Cambio de Delta por Paso del Tiempo $M/día)",
                     xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
-                    yaxis=dict(title="CHEX ($ Millones/día)", gridcolor="rgba(255,255,255,0.05)"),
+                    yaxis=dict(title="CHEX ($ Millones)", gridcolor="rgba(255,255,255,0.05)"),
                     height=560, margin=dict(l=50, r=40, t=50, b=40)
                 )
                 st.plotly_chart(fig_chex, use_container_width=True)
