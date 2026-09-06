@@ -502,6 +502,7 @@ tz_target = "America/Lima" if "UTC-5" in tz_choice else "America/New_York"
 
 st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
 
+# --- CORRECCIÓN DEL AUTO-REFRESCO PARA EVITAR BUCLES INFINITOS ---
 auto_refresh = st.sidebar.toggle("AUTO-REFRESCO EN VIVO", value=False)
 refresh_interval = st.sidebar.select_slider(
     "INTERVALO (SEGUNDOS)",
@@ -513,10 +514,9 @@ refresh_interval = st.sidebar.select_slider(
 if auto_refresh:
     try:
         from streamlit_autorefresh import st_autorefresh
-        st_autorefresh(interval=refresh_interval * 1000, key="gex_auto_refresh")
+        st_autorefresh(interval=refresh_interval * 1000, key=f"gex_auto_refresh_{refresh_interval}")
     except ImportError:
-        time.sleep(refresh_interval)
-        st.rerun()
+        st.sidebar.warning("⚠️ Instala `streamlit-autorefresh` para habilitar el refresco dinámico sin bloqueos.")
 
 st.sidebar.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 if st.sidebar.button("🔄 ACTUALIZAR DATOS AHORA", use_container_width=True):
@@ -755,7 +755,6 @@ if not h_1m.empty and is_online:
     spot_series = h_1m_reindexed['Close'].ffill().bfill()
     full_spots = spot_series.fillna(spot_price).tolist()
     
-    # SINCRONIZACIÓN CORREGIDA: Sincronizar el spot_price con la última vela real
     if full_spots and full_spots[-1] > 0:
         spot_price = float(full_spots[-1])
 
@@ -793,12 +792,11 @@ elif is_cloud_backup and jsonbin_history_data:
     else:
         full_spots = []
 else:
-    # --- GENERADOR INTRADÍA SINTÉTICO (SINCRONIZADO) ---
     np.random.seed(42)
     n_mins = len(full_timestamps)
     price_changes = np.random.normal(0, 0.15, n_mins)
     cum_drift = np.cumsum(price_changes)
-    cum_drift = cum_drift - cum_drift[-1]  # Asegura que el punto final sea exactamente spot_price
+    cum_drift = cum_drift - cum_drift[-1]
     full_spots = (spot_price + cum_drift).tolist()
     
     syn_opens = full_spots.copy()
@@ -815,7 +813,6 @@ else:
         'Volume': syn_vols
     }, index=full_time_grid)
 
-# --- GENERADOR DE RESPALDO SINTÉTICO SI NO HAY CADENA DE OPCIONES ---
 if df_curr.empty:
     np.random.seed(42)
     s_min = int(np.floor(spot_price - strike_range))
@@ -930,7 +927,6 @@ def safe_strike_range(df_sub):
     x_half_span = ((s_max - s_min) / 2.0) + 1.0
     return {"range": [x_mid - (x_half_span * 1.5), x_mid + (x_half_span * 1.5)]}
 
-# --- RECALCULO DINÁMICO DE GAMMA ---
 def recalculate_gex_for_spot(df_input, spot_t, T_exp, iv):
     if df_input.empty or spot_t <= 0:
         return df_input
@@ -952,7 +948,6 @@ def recalculate_gex_for_spot(df_input, spot_t, T_exp, iv):
     df_out['net_gex'] = df_out['call_gex'] + df_out['put_gex']
     return df_out
 
-# --- CÁLCULOS CUÁNTICOS DE OPCIONES ---
 if not df_curr.empty and exp_0dte is not None and spot_price > 0:
     exp_date_part = exp_0dte.split(':')[0] if isinstance(exp_0dte, str) and ':' in exp_0dte else str(exp_0dte)
     try:
@@ -1050,7 +1045,6 @@ else:
     iv_str = "20.00%"
     iv_rank_str = "N/A"
 
-# --- MATRIZ DE HEATMAP REAL/SIMULADA ---
 if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
     Z_matrix_real = np.zeros((len(fine_strikes), len(full_timestamps)))
     if not df_curr.empty and len(full_timestamps) > 0:
@@ -1073,7 +1067,6 @@ if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
     if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
         Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
 
-# CÁLCULO DE DRIFT DE PRIMA
 closes_drift = np.array(full_spots)
 vols_drift = h_1m_reindexed['Volume'].fillna(1000).values if not h_1m_reindexed.empty else np.full(len(full_timestamps), 1000)
 
@@ -1087,7 +1080,6 @@ else:
     call_drift_raw, put_drift_raw, net_drift_raw = np.zeros(len(full_timestamps)), np.zeros(len(full_timestamps)), np.zeros(len(full_timestamps))
     last_call_drift, last_put_drift, last_net_drift = 0.0, 0.0, 0.0
 
-# GENERADOR SINTÉTICO DE HISTORIAL JSONBIN PARA BACKGAMMA SI ESTÁ VACÍO
 if not jsonbin_history_data:
     mock_date = now_tz.strftime('%Y-%m-%d')
     mock_snaps = []
@@ -1947,7 +1939,7 @@ with tab_greeks:
                     template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
                     title="Charm Exposure Total (CHEX - Cambio de Delta por Paso del Tiempo $M/día)",
                     xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
-                    yaxis=dict(title="CHEX ($ Millones)", gridcolor="rgba(255,255,255,0.05)"),
+                    yaxis=dict(title="CHEX ($M/día)", gridcolor="rgba(255,255,255,0.05)"),
                     height=560, margin=dict(l=50, r=40, t=50, b=40)
                 )
                 st.plotly_chart(fig_chex, use_container_width=True)
