@@ -1256,12 +1256,7 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
 * **Vanna Exposure (VANNA)**: {vanna_v:.2f}M USD. Mide el impacto en deltas si la IV comprime o se expande en la sesión.
 * **Net Premium Drift**: {fmt_val(drift_v).replace('$', '')} USD. El flujo acumulado muestra un sesgo {drift_bias}.
 
-# Reemplazar la regla 4 en las líneas 715-716 por esto:
 **4. Escenario Más Probable y Proyección Estratégica**:
-Debes presentar obligatoriamente como mínimo 3 escenarios condicionales detallados basados en los niveles (Call Walls, Put Walls y Zero Gamma):
-- Escenario A (Continuación/Retesteo Aceptado): Si rompemos y aceptamos el retesteo en el nivel X, lo más probable es continuar hasta Y.
-- Escenario B (Rechazo en Resistencia/Soporte): Si rechazamos el nivel X, lo más probable es buscar el nivel Y.
-- Escenario C (Trampa/Falsa Ruptura): Si rompemos el nivel X pero perdemos la estructura inmediatamente, lo más probable es un movimiento de reversión hacia Y.
 {escenario_txt}
 """
 
