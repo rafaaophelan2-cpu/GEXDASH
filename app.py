@@ -4,7 +4,6 @@ import time
 import requests
 import hashlib
 import threading
-import re
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -138,21 +137,15 @@ def log_to_console(source: str, error_detail: str):
         except Exception:
             pass
 
-# --- ESTILOS CSS FINTECH INSTITUCIONAL Y ANTI-CURSIVAS ---
+# --- ESTILOS CSS FINTECH INSTITUCIONAL ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
     
-    html, body, [class*="css"], .stMarkdown, p, span, li, h1, h2, h3, h4, h5, h6 {
+    html, body, [class*="css"] {
         font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
-        font-style: normal !important;
         background-color: #06080D !important;
         color: #D1D5DB;
-    }
-
-    /* FORZAR NULA EXISTENCIA DE LETRAS ECHADAS / CURSIVAS */
-    em, i, .katex, .math, [class*="chat"] p, [class*="chat"] span {
-        font-style: normal !important;
     }
     
     .stApp {
@@ -288,43 +281,6 @@ st.markdown("""
         box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     }
 
-    /* ESTILOS DE TARJETA DE ANÁLISIS IA (FINTECH PRO) */
-    .ai-analysis-container {
-        background: linear-gradient(135deg, rgba(13, 18, 30, 0.95) 0%, rgba(8, 11, 18, 0.98) 100%);
-        border: 1px solid rgba(59, 130, 246, 0.25);
-        border-radius: 10px;
-        padding: 20px;
-        margin-top: 10px;
-        margin-bottom: 15px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-    }
-
-    .ai-analysis-container h4 {
-        color: #60A5FA !important;
-        font-family: 'Plus Jakarta Sans', sans-serif !important;
-        font-weight: 800 !important;
-        font-size: 0.95rem !important;
-        letter-spacing: 0.5px !important;
-        margin-top: 16px !important;
-        margin-bottom: 8px !important;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-        padding-bottom: 4px;
-        text-transform: uppercase;
-    }
-
-    .ai-analysis-container ul {
-        margin-top: 4px;
-        margin-bottom: 10px;
-        padding-left: 18px;
-    }
-
-    .ai-analysis-container li {
-        margin-bottom: 6px;
-        line-height: 1.5;
-        color: #E2E8F0;
-        font-size: 0.86rem;
-    }
-
     .badge-online {
         background: rgba(16, 185, 129, 0.12);
         border: 1px solid rgba(16, 185, 129, 0.4);
@@ -353,6 +309,21 @@ st.markdown("""
         display: inline-flex;
         align-items: center;
         gap: 6px;
+    }
+    
+    .data-summary-box {
+        background: #0E131F;
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+
+    .data-table-container {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 20px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -443,19 +414,10 @@ if "chat_messages" not in st.session_state:
             pass
 
 def clean_ai_response(text: str) -> str:
-    """Limpia la respuesta para forzar nula existencia de cursivas o LaTeX que deforme las letras."""
     if not text:
         return ""
     cleaned = text.replace("$", "")
     cleaned = cleaned.replace(r"\(", "").replace(r"\)", "").replace(r"\[", "").replace(r"\]", "")
-    
-    # Proteger marcadores de negrita **
-    cleaned = re.sub(r'\*\*(.*?)\*\*', r'___BOLD___\1___ENDBOLD___', cleaned)
-    # Eliminar asteriscos o guiones bajos simples que crean cursiva (*texto* o _texto_)
-    cleaned = re.sub(r'\*(.*?)\*', r'\1', cleaned)
-    cleaned = re.sub(r'_(.*?)_', r'\1', cleaned)
-    # Restaurar negritas
-    cleaned = cleaned.replace("___BOLD___", "**").replace("___ENDBOLD___", "**")
     return cleaned
 
 def save_chat_message(role: str, content: str):
@@ -1223,7 +1185,7 @@ if not jsonbin_history_data and not latest_supabase_snap:
         })
     jsonbin_history_data = {mock_date: mock_snaps}
 
-# --- MOTOR DE ANÁLISIS DEDICADO PROFUNDO E IA ---
+# --- MOTOR DE ANÁLISIS DEDICADO E IA ---
 def generar_analisis_local(ticker, spot, net_gex, regime, condition,
                           call_gex, put_gex, total_gex,
                           cw1_v, cw2_v, cw3_v, pw1_v, pw2_v, pw3_v, zg_v,
@@ -1250,44 +1212,52 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
         drift_bias = "fuertemente bajista (presión compradora en primas Put)"
     else:
         drift_bias = "neutral / equilibrado entre flujos de compra y venta"
+        
+    if is_pos and abs(dist_zg) < 3.0:
+        escenario_txt = (
+            f"**Consolidación en Rango con Eje en Zero Gamma (${zg_v:.2f})**.\n\n"
+            f"* **Zonas de Rebote Esperadas**: Sólida defensa compradora en Put Wall 1 (${pw1_v:.0f}) y PW2 (${pw2_v:.0f}).\n"
+            f"* **Zonas de Rotación / Fricción Alcista**: El avance encontrará techos relevantes en Call Wall 1 (${cw1_v:.0f}) y CW2 (${cw2_v:.0f}).\n"
+            f"* **Nivel de Inflexión Crítico**: El nivel pivote clave está en **${zg_v:.2f} USD**. Cotizar por debajo activaría el régimen negativo, acelerando caídas hacia PW1 (${pw1_v:.0f})."
+        )
+    elif is_pos:
+        escenario_txt = (
+            f"**Estructura Alcista Controlada / Reversión a la Media**.\n\n"
+            f"* **Soportes Operativos**: {zg_v:.2f} USD (Zero Gamma) y {pw1_v:.0f} USD (PW1).\n"
+            f"* **Objetivos Alcistas**: Rotación progresiva hacia CW1 ({cw1_v:.0f} USD) con extensión hacia CW2 ({cw2_v:.0f} USD).\n"
+            f"* **Dinámica del Mercado**: Movimientos acotados donde la compresión de volatilidad favorece ventas de primas."
+        )
+    else:
+        escenario_txt = (
+            f"**Riesgo de Expansión y Volatilidad Acelerada**.\n\n"
+            f"* **Escenario Bajista**: Al encontrarse en Gamma Negativo por debajo de Zero Gamma (${zg_v:.2f}), la pérdida de PW1 (${pw1_v:.0f}) acelerará ventas hacia PW2 (${pw2_v:.0f}).\n"
+            f"* **Recuperación y Confirmación Alcista**: Requerirá superar de manera firme y sostenida el nivel de Flip en **${zg_v:.2f} USD**."
+        )
 
-    return f"""#### 1. ESTADO ACTUAL Y RÉGIMEN DE MERCADO
-* **Precio Spot Actual**: {spot:.2f} USD | **Zero Gamma Level (Flip)**: {zg_v:.2f} USD (Distancia: {dist_zg:+.2f}%).
+    return f"""### 📌 DIAGNÓSTICO ESTRATÉGICO Y PROBABILIDADES DE MERCADO ({ticker})
+
+#### 1. Estado Actual y Régimen del Mercado
+* **Precio Spot Actual**: ${spot:.2f} USD | **Zero Gamma Level (Flip)**: ${zg_v:.2f} USD ({dist_zg:+.2f}% de distancia).
 * **Régimen Dominante**: {regime_tipo}.
 * **Dinámica de Volatilidad**: IV ATM en {iv_txt} (Percentil: {iv_rank}). {behavior}
 
-#### 2. MAPA DE NIVELES TÁCTICOS Y PIVOTES
-* **Resistencias Clave (Call Walls)**:
-  - **CW1 (Techo Primario)**: {cw1_v:.0f} USD ({dist_cw1:+.2f}%)
-  - **CW2 (Techo Secundario)**: {cw2_v:.0f} USD
-  - **CW3 (Extensión Máxima)**: {cw3_v:.0f} USD
-* **Soportes Clave (Put Walls)**:
-  - **PW1 (Suelo Primario)**: {pw1_v:.0f} USD (-{dist_pw1:.2f}%)
-  - **PW2 (Suelo Secundario)**: {pw2_v:.0f} USD
-  - **PW3 (Suelo de Extensión)**: {pw3_v:.0f} USD
-* **Nivel Pivote Neurálgico (Flip)**: **{zg_v:.2f} USD**. Define el cambio de régimen entre compresión y expansión.
+#### 2. Puntos Clave de Inflexión y Niveles Operativos
+* **Resistencias Principales (Call Walls)**:
+  - **CW1 (Techo Principal)**: ${cw1_v:.0f} USD ({dist_cw1:+.2f}%)
+  - **CW2 / CW3 (Resistencias de Extensión)**: ${cw2_v:.0f} USD / ${cw3_v:.0f} USD
+* **Soportes Principales (Put Walls)**:
+  - **PW1 (Suelo Principal)**: ${pw1_v:.0f} USD (-{dist_pw1:.2f}%)
+  - **PW2 / PW3 (Soportes de Extensión)**: ${pw2_v:.0f} USD / ${pw3_v:.0f} USD
+* **Flip Level / Pivote Técnico**: **${zg_v:.2f} USD**. Mantenerse por encima mantiene el control en rango; perforar a la baja liberará volatilidad a favor de los vendedores.
 
-#### 3. ANÁLISIS DE FLUJO Y GRIEGAS
-* **Delta Exposure (DEX)**: {dex_v:.2f}M USD. Refleja un sesgo direccional {"positivo (alcista)" if dex_v >= 0 else "negativo (bajista)"}.
-* **Charm Exposure (CHEX)**: {chex_v:.2f}M USD/día. Decaimiento de delta por paso del tiempo hacia la expiración.
-* **Vanna Exposure (VANNA)**: {vanna_v:.2f}M USD. Ajuste de deltas ante cambios en la volatilidad implícita.
-* **Net Premium Drift**: {fmt_val(drift_v).replace('$', '')} USD. Flujo acumulado con sesgo {drift_bias}.
+#### 3. Análisis de Flujo y Griegas
+* **Delta Exposure (DEX)**: {dex_v:.2f}M USD. Muestra un sesgo direccional {"positivo" if dex_v >= 0 else "negativo"}.
+* **Charm Exposure (CHEX)**: {chex_v:.2f}M USD/día. Decaimiento de delta por tiempo atrae el precio hacia strikes con mayor acumulación de OI.
+* **Vanna Exposure (VANNA)**: {vanna_v:.2f}M USD. Mide el impacto en deltas si la IV comprime o se expande en la sesión.
+* **Net Premium Drift**: {fmt_val(drift_v).replace('$', '')} USD. El flujo acumulado muestra un sesgo {drift_bias}.
 
-#### 4. MAPA DE RUTAS Y ESCENARIOS CONDICIONALES (IF/THEN)
-* **ESCENARIO ALCISTA (Ruptura vs. Rechazo)**:
-  - **Si rompemos y consolidamos por encima de {cw1_v:.0f} USD (CW1)**: Se activará una cobertura de dealers que acelerará el precio rápidamente a buscar **{cw2_v:.0f} USD (CW2)**, y de mantener la presión de primas Call, se extendería hasta **{cw3_v:.0f} USD (CW3)**.
-  - **Si testeamos {cw1_v:.0f} USD pero fallamos en romper**: Esperamos un rechazo técnico con re-test y retroceso hacia **{zg_v:.2f} USD (Zero Gamma)** o **{pw1_v:.0f} USD (PW1)** para rebalancear liquidez.
-
-* **ESCENARIO BAJISTA (Pérdida de Niveles vs. Rebote)**:
-  - **Si el precio pierde y consolida por debajo de {zg_v:.2f} USD (Zero Gamma)**: El mercado entra en régimen de Gamma Negativo. Si a esto se suma la pérdida de **{pw1_v:.0f} USD (PW1)**, la venta forzada de coberturas acelerará el movimiento bajista directo a visitar **{pw2_v:.0f} USD (PW2)**, con riesgo de capitulación hasta **{pw3_v:.0f} USD (PW3)**.
-  - **Si el precio testea {pw1_v:.0f} USD (PW1) y muestra absorción compradora**: Esperamos un rebote de reacción buscando recuperar el nivel pivote de **{zg_v:.2f} USD**.
-
-* **ESCENARIO NEUTRAL (RANGO DE COMPRESIÓN)**:
-  - Mientras el precio cotice atrapado entre **{pw1_v:.0f} USD** y **{cw1_v:.0f} USD**, el mercado permanecerá en rango de oscilación con alta probabilidad de reversión a la media alrededor de **{zg_v:.2f} USD**.
-
-#### 5. CONCLUSIÓN TÁCTICA Y PLAN DE EJECUCIÓN
-* **Sesgo Dominante**: {"Favor a mantener posiciones en rango/compras en soportes." if is_pos else "Riesgo de volatilidad alta; priorizar rupturas o confirmación de pisos."}
-* **Confirmación Clave**: Monitorear el comportamiento del volumen y la pendiente del Net Drift en los niveles **{cw1_v:.0f} USD** y **{pw1_v:.0f} USD**.
+#### 4. Escenario Más Probable y Proyección
+{escenario_txt}
 """
 
 def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
@@ -1299,7 +1269,7 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
 
     system_prompt = f"""
     Eres un analista cuantitativo institucional experto en opciones y estratega de mercado en el GEX Quant Terminal.
-    Tu objetivo es entregar un análisis técnico, estructurado, profesional y muy profundo para {ticker_symbol}.
+    Tu objetivo es entregar un análisis técnico, estructurado y profundo para {ticker_symbol}.
 
     DATOS DEL MERCADO EN TIEMPO REAL ({ticker_symbol}):
     - Ticker: {ticker_symbol} | Spot Price: {spot_price:.2f} USD | Ratio NQ: {conversion_ratio:.4f}
@@ -1313,18 +1283,14 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
     - Vega Exposure (VEX): {net_vex_val:,.0f} USD/1% IV | Charm Exposure (CHEX): {net_chex_val:.2f}M USD/día | Vanna (VANNA): {net_vanna_val:.2f}M USD
     - Net Premium Drift: {fmt_val(last_net_drift).replace('$', '')} USD
 
-    REGLAS ESTRICTAS DE FORMATO Y ESTILO:
-    1. TIPOGRAFÍA Y LETRAS: Está ESTRICTAMENTE PROHIBIDO usar letras inclinadas/cursivas (*cursiva* o _cursiva_), notación LaTeX o símbolos de dólar dobles ($$). Usa ÚNICAMENTE texto normal y negritas (**negrita**).
-    2. NO des análisis planos ni genéricos. NUNCA te limites a listar niveles diciendo "podemos rebotar ahí". Debes hacer un análisis profundo, dinámico y condicional (IF/THEN).
-    3. ESTRUCTURA OBLIGATORIA DEL ANÁLISIS:
-       #### 1. ESTADO ACTUAL Y RÉGIMEN DE MERCADO
-       #### 2. MAPA DE NIVELES TÁCTICOS Y PIVOTES
-       #### 3. ANÁLISIS DE FLUJO Y GRIEGAS (DEX, VEX, CHEX, VANNA, DRIFT)
-       #### 4. MAPA DE RUTAS Y ESCENARIOS CONDICIONALES (IF/THEN)
-          - Escenario Alcista: Qué pasa si rompemos CW1 (objetivo CW2, CW3) vs. Qué pasa si fallamos en romper CW1 (rechazo hacia Zero Gamma o PW1).
-          - Escenario Bajista: Qué pasa si perdemos Zero Gamma / PW1 (aceleración bajista a PW2, PW3) vs. Qué pasa si PW1 sostiene con absorción (rebote a Zero Gamma).
-          - Escenario Neutral / Rango: Dinámica entre PW1 y CW1.
-       #### 5. CONCLUSIÓN TÁCTICA Y PLAN DE EJECUCIÓN
+    REGLAS DE RESPUESTA OBLIGATORIAS:
+    1. NO respondas con mensajes vacíos o saludos genéricos.
+    2. Si el usuario solicita un análisis ("Pre-Market", "Intradía", "Análisis" o preguntas de mercado), DEBES responder obligatoriamente siguiendo exactamente los 4 puntos estructurados:
+       **1. Estado Actual y Régimen del Mercado**
+       **2. Puntos Clave de Inflexión y Niveles Operativos**
+       **3. Análisis de Flujo y Griegas (DEX, VEX, CHEX, VANNA, Net Drift)**
+       **4. Escenario Más Probable y Proyección Estratégica** (indica si se prevé rango o expansión, zonas de rebote, pivote en Zero Gamma e invalidación).
+    3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$). Usa fuentes y letras normales.
     """
 
     prompt_final = mensaje_usuario or f"Entrega un informe cuantitativo completo de opciones para {tipo_analisis} con los datos del mercado actual."
@@ -1403,10 +1369,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
 
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
-            if msg["role"] == "assistant":
-                st.markdown(f'<div class="ai-analysis-container">{msg["content"]}</div>', unsafe_allow_html=True)
-            else:
-                st.write(msg["content"])
+            st.write(msg["content"])
 
     if chat_input := st.chat_input("Pregunta sobre GEX, Griegas o niveles de mercado..."):
         save_chat_message("user", chat_input)
@@ -1417,7 +1380,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
             respuesta_bot = consultar_ia(mensaje_usuario=chat_input)
             save_chat_message("assistant", respuesta_bot)
             with st.chat_message("assistant"):
-                st.markdown(f'<div class="ai-analysis-container">{respuesta_bot}</div>', unsafe_allow_html=True)
+                st.write(respuesta_bot)
 
 # --- PANEL DE MÉTRICAS TOP ---
 cw_diff = ((cw1 - spot_price) / spot_price * 100) if spot_price > 0 else 0
@@ -1814,8 +1777,8 @@ with tab_greeks:
                 st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
                 fig_vanna = go.Figure()
-                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vanna'], name="Call VANNA (+)", marker_color='#DDD6FE'))
-                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vanna'], name="Put VANNA (-)", marker_color='#5B21B6'))
+                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vanna'], name="Call Vanna (+)", marker_color='#C084FC'))
+                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vanna'], name="Put Vanna (-)", marker_color='#581C87'))
                 if spot_price > 0: fig_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
                 fig_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Call vs Put Vanna Exposure por Strike</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
                 st.plotly_chart(fig_vanna, use_container_width=True)
@@ -1825,45 +1788,190 @@ with tab_greeks:
 # --- 5. BACKGAMMA ---
 with tab_back:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📜 Historial e Inspecionar Backgamma</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📜 HISTORIAL DE GAMMA & BACKTESTING SNAPSHOTS</h3>", unsafe_allow_html=True)
     
     if jsonbin_history_data:
-        available_dates = sorted(list(jsonbin_history_data.keys()), reverse=True)
-        sel_date = st.selectbox("FECHA DE HISTORIAL (JSONBIN)", available_dates)
+        avail_dates = sorted(list(jsonbin_history_data.keys()), reverse=True)
+        sel_date = st.selectbox("Seleccionar Fecha Guardada en Nube", avail_dates)
         
-        if sel_date:
-            day_snaps = jsonbin_history_data.get(sel_date, [])
-            if day_snaps:
-                snap_times = [s.get("time") for s in day_snaps]
-                sel_time = st.select_slider("HORA DE SNAPSHOT", options=snap_times, value=snap_times[-1])
-                
-                sel_snap = next((s for s in day_snaps if s.get("time") == sel_time), None)
-                if sel_snap:
-                    st.markdown(f"**Spot price en snapshot:** ${sel_snap.get('spot', 0.0):.2f} | **Net GEX acumulado:** {fmt_val(sel_snap.get('net_gex', 0.0))}")
-                    stks_hist = sel_snap.get("strikes", [])
-                    if stks_hist:
-                        df_hist_stks = pd.DataFrame(stks_hist)
-                        fig_hist = go.Figure()
-                        colors_h = ['#10B981' if v >= 0 else '#EF4444' for v in df_hist_stks['net_gex']]
-                        fig_hist.add_trace(go.Bar(x=df_hist_stks['strike'], y=df_hist_stks['net_gex'], marker_color=colors_h))
-                        fig_hist.add_vline(x=sel_snap.get('spot', 0.0), line_color="#3B82F6", line_dash="dash")
-                        fig_hist.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title=f"GEX Profile Histórico - {sel_date} {sel_time}", height=450)
-                        st.plotly_chart(fig_hist, use_container_width=True)
-            else:
-                st.info("No hay registros detallados para la fecha seleccionada.")
+        if sel_date and sel_date in jsonbin_history_data:
+            day_snaps = jsonbin_history_data[sel_date]
+            st.info(f"Mostrando {len(day_snaps)} capturas registradas el {sel_date}.")
+            
+            times_hist = [s.get("time") for s in day_snaps]
+            spots_hist = [s.get("spot", 0.0) for s in day_snaps]
+            gex_hist = [s.get("net_gex", 0.0) for s in day_snaps]
+            
+            fig_back = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.6, 0.4])
+            fig_back.add_trace(go.Scatter(x=times_hist, y=spots_hist, mode='lines+markers', name='Spot Price', line=dict(color='#3B82F6', width=2)), row=1, col=1)
+            fig_back.add_trace(go.Bar(x=times_hist, y=gex_hist, name='Net GEX', marker_color=['#10B981' if v>=0 else '#EF4444' for v in gex_hist]), row=2, col=1)
+            
+            fig_back.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', height=500, margin=dict(l=50, r=40, t=30, b=30))
+            st.plotly_chart(fig_back, use_container_width=True)
     else:
-        st.info("No hay historial disponible guardado en JSONBin.")
+        st.warning("No hay registros históricos almacenados en la nube actualmente.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 6. DATA ---
+# --- 6. DATA (SUBDIVIDIDO EN DATA SUMMARY Y DATA GRID) ---
 with tab_data:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>🗄️ TABLA DE DATOS CRUDOS DE OPCIONES</h3>", unsafe_allow_html=True)
-    if not df_curr.empty:
-        df_show = df_curr.copy()
-        cols_order = ['strike', 'openInterest_c', 'openInterest_p', 'call_gex', 'put_gex', 'net_gex', 'net_dex', 'net_tex', 'net_vex', 'net_chex', 'net_vanna', 'iv_c', 'iv_p']
-        existing_cols = [c for c in cols_order if c in df_show.columns]
-        st.dataframe(df_show[existing_cols], use_container_width=True, height=500)
-    else:
-        st.warning("No hay datos de opciones disponibles para mostrar.")
+    
+    # Subdivisión principal de la pestaña DATA
+    sub_data_summary, sub_data_grid = st.tabs(["DATA SUMMARY", "DATA GRID"])
+    
+    # --- SUBDIVISIÓN 1: DATA SUMMARY ---
+    with sub_data_summary:
+        st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.15rem; letter-spacing:0.5px;'>📋 RESUMEN DE NIVELES DEL DÍA Y ESTRUCTURA GEX</h3>", unsafe_allow_html=True)
+        st.caption("Consolidado cuantitativo de precios, volatilidad, niveles clave de Gamma Walls y pivote intradía.")
+        
+        # TABLA 1: NIVELES DEL DÍA Y MÉTRICAS CLAVE DE PRECIO
+        st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:700; font-size:0.88rem; color:#60A5FA; margin-bottom:8px;'>1. NIVELES DEL DÍA Y MÉTRICAS DE MERCADO</p>", unsafe_allow_html=True)
+        
+        high_day = max(full_spots) if full_spots else spot_price
+        low_day = min(full_spots) if full_spots else spot_price
+        open_day = full_spots[0] if full_spots else spot_price
+        
+        df_niveles_dia = pd.DataFrame([
+            {"Métrica / Nivel": "Symbol / Ticker", "Valor Intradía": ticker_symbol, "Detalle / Referencia": "Activo Subyacente Principal"},
+            {"Métrica / Nivel": "Precio Spot Actual", "Valor Intradía": f"${spot_price:.2f}", "Detalle / Referencia": "Cotización de Mercado en Tiempo Real"},
+            {"Métrica / Nivel": "Precio de Apertura (Open)", "Valor Intradía": f"${open_day:.2f}", "Detalle / Referencia": "Inicio de Sesión Regular"},
+            {"Métrica / Nivel": "Máximo del Día (High)", "Valor Intradía": f"${high_day:.2f}", "Detalle / Referencia": f"Rango Alto ({((high_day-spot_price)/spot_price*100):+.2f}%)"},
+            {"Métrica / Nivel": "Mínimo del Día (Low)", "Valor Intradía": f"${low_day:.2f}", "Detalle / Referencia": f"Rango Bajo ({((low_day-spot_price)/spot_price*100):+.2f}%)"},
+            {"Métrica / Nivel": "Ratio NQ / QQQ", "Valor Intradía": f"{conversion_ratio:.4f}", "Detalle / Referencia": "Factor Conversión Futuro / ETF"},
+            {"Métrica / Nivel": "Volatilidad Implícita (IV ATM)", "Valor Intradía": iv_str, "Detalle / Referencia": f"Percentil: {iv_rank_str}"},
+            {"Métrica / Nivel": "Net Premium Drift", "Valor Intradía": fmt_val(last_net_drift), "Detalle / Referencia": "Flujo Acumulado de Primas Neto"}
+        ])
+        
+        st.dataframe(
+            df_niveles_dia,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Métrica / Nivel": st.column_config.TextColumn("Métrica / Nivel", width="medium"),
+                "Valor Intradía": st.column_config.TextColumn("Valor Intradía", width="small"),
+                "Detalle / Referencia": st.column_config.TextColumn("Detalle / Referencia", width="large")
+            }
+        )
+        
+        st.markdown("<div style='height:15px;'></div>", unsafe_allow_html=True)
+        
+        # TABLA 2: NIVELES GEX (GAMMA EXPOSURE & WALLS)
+        st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:700; font-size:0.88rem; color:#10B981; margin-bottom:8px;'>2. ESTRUCTURA DE NIVELES GEX Y ZONAS DE LIQUIDEZ</p>", unsafe_allow_html=True)
+        
+        df_niveles_gex = pd.DataFrame([
+            {"Nivel GEX": "Call Wall 1 (CW1)", "Strike ($)": f"${cw1:.0f}", "Distancia a Spot": f"{cw_diff:+.2f}%", "Función": "Resistencia Principal (Techo de Gamma)"},
+            {"Nivel GEX": "Call Wall 2 (CW2)", "Strike ($)": f"${cw2:.0f}", "Distancia a Spot": f"{((cw2-spot_price)/spot_price*100):+.2f}%", "Función": "Resistencia de Extensión Alcista"},
+            {"Nivel GEX": "Call Wall 3 (CW3)", "Strike ($)": f"${cw3:.0f}", "Distancia a Spot": f"{((cw3-spot_price)/spot_price*100):+.2f}%", "Función": "Resistencia Extrema"},
+            {"Nivel GEX": "Zero Gamma Level (Flip)", "Strike ($)": f"${zero_gamma:.2f}", "Distancia a Spot": f"{zg_diff:+.2f}%", "Función": "Pivote de Transición (Régimen Pos/Neg)"},
+            {"Nivel GEX": "Put Wall 1 (PW1)", "Strike ($)": f"${pw1:.0f}", "Distancia a Spot": f"{pw_diff:+.2f}%", "Función": "Soporte Principal (Suelo de Gamma)"},
+            {"Nivel GEX": "Put Wall 2 (PW2)", "Strike ($)": f"${pw2:.0f}", "Distancia a Spot": f"{((pw2-spot_price)/spot_price*100):+.2f}%", "Función": "Soporte de Extensión Bajista"},
+            {"Nivel GEX": "Put Wall 3 (PW3)", "Strike ($)": f"${pw3:.0f}", "Distancia a Spot": f"{((pw3-spot_price)/spot_price*100):+.2f}%", "Función": "Soporte Extremo"},
+            {"Nivel GEX": "Net Gamma Total", "Strike ($)": fmt_val(net_gex_total), "Distancia a Spot": regime_str.upper(), "Función": condition_str}
+        ])
+        
+        st.dataframe(
+            df_niveles_gex,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Nivel GEX": st.column_config.TextColumn("Nivel GEX", width="medium"),
+                "Strike ($)": st.column_config.TextColumn("Strike ($)", width="small"),
+                "Distancia a Spot": st.column_config.TextColumn("Distancia a Spot", width="small"),
+                "Función": st.column_config.TextColumn("Función / Comportamiento", width="large")
+            }
+        )
+        
+        st.markdown("<hr style='border-color:rgba(255,255,255,0.08); margin: 25px 0;'>", unsafe_allow_html=True)
+        
+        # REPORTE Y DIAGNÓSTICO ESTRATÉGICO CON IA
+        st.markdown("<h4 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.05rem; letter-spacing:0.5px;'>🧠 REPORTE Y DIAGNÓSTICO ESTRATÉGICO CON IA</h4>", unsafe_allow_html=True)
+        st.caption("Genera un análisis completo usando la información actual provista por el terminal.")
+        
+        if "data_summary_ai_report" not in st.session_state:
+            st.session_state.data_summary_ai_report = ""
+
+        col_btn_gen, col_btn_sp = st.columns([3, 7])
+        with col_btn_gen:
+            if st.button("⚡ GENERAR DIAGNÓSTICO DE MERCADO (IA)", key="btn_generate_summary_ai", use_container_width=True):
+                with st.spinner("Procesando matriz de datos y analizando estructura de mercado..."):
+                    reporte_res = consultar_ia(
+                        tipo_analisis="Resumen de Datos y Estrategia",
+                        mensaje_usuario="Genera el reporte cuantitativo y diagnóstico estratégico completo incorporando los niveles clave del día y perfiles GEX."
+                    )
+                    st.session_state.data_summary_ai_report = reporte_res
+
+        if st.session_state.data_summary_ai_report:
+            st.markdown("<div style='height:15px;'></div>", unsafe_allow_html=True)
+            st.markdown("<div class='data-summary-box'>", unsafe_allow_html=True)
+            st.markdown(st.session_state.data_summary_ai_report)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- SUBDIVISIÓN 2: DATA GRID ---
+    with sub_data_grid:
+        st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.15rem; letter-spacing:0.5px;'>📋 MATRIZ DE DATOS Y CADENA DE OPCIONES CALCULADA (DATA GRID)</h3>", unsafe_allow_html=True)
+        st.caption("Visualización de matriz completa de datos calculados por strike en tiempo real.")
+
+        if not df_curr.empty:
+            df_display = df_curr.copy()
+            
+            # Renombrar columnas para interfaz limpia y profesional
+            cols_map = {
+                'strike': 'Strike',
+                'openInterest_c': 'Call OI',
+                'openInterest_p': 'Put OI',
+                'call_gex': 'Call GEX ($)',
+                'put_gex': 'Put GEX ($)',
+                'net_gex': 'Net GEX ($)',
+                'call_dex': 'Call DEX ($M)',
+                'put_dex': 'Put DEX ($M)',
+                'net_dex': 'Net DEX ($M)',
+                'call_tex': 'Call TEX ($)',
+                'put_tex': 'Put TEX ($)',
+                'net_tex': 'Net TEX ($)',
+                'call_vex': 'Call VEX ($)',
+                'put_vex': 'Put VEX ($)',
+                'net_vex': 'Net VEX ($)',
+                'call_chex': 'Call CHEX ($M)',
+                'put_chex': 'Put CHEX ($M)',
+                'net_chex': 'Net CHEX ($M)',
+                'call_vanna': 'Call VANNA ($M)',
+                'put_vanna': 'Put VANNA ($M)',
+                'net_vanna': 'Net VANNA ($M)',
+                'iv_c': 'Call IV',
+                'iv_p': 'Put IV'
+            }
+            
+            df_display = df_display.rename(columns=cols_map)
+            
+            # Filtro por rango de strike en el grid
+            min_grid_stk = float(df_display['Strike'].min()) if 'Strike' in df_display.columns else 0.0
+            max_grid_stk = float(df_display['Strike'].max()) if 'Strike' in df_display.columns else 1000.0
+            
+            col_f1, col_f2, col_f3 = st.columns([3, 3, 4])
+            with col_f1:
+                stk_filter_min = st.number_input("Strike Mínimo", value=float(min_strike), step=1.0)
+            with col_f2:
+                stk_filter_max = st.number_input("Strike Máximo", value=float(max_strike), step=1.0)
+            with col_f3:
+                st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+                csv_data = df_display.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 EXPORTAR DATA GRID A CSV",
+                    data=csv_data,
+                    file_name=f"GEX_DataGrid_{ticker_symbol}_{now_tz.strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            df_filtered_grid = df_display[(df_display['Strike'] >= stk_filter_min) & (df_display['Strike'] <= stk_filter_max)]
+
+            st.dataframe(
+                df_filtered_grid,
+                use_container_width=True,
+                height=600,
+                hide_index=True
+            )
+        else:
+            st.info("No hay datos de opciones disponibles para mostrar en la Data Grid.")
+
     st.markdown('</div>', unsafe_allow_html=True)
