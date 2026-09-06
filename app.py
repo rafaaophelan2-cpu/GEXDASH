@@ -1721,4 +1721,3 @@ with tab_3d:
             margin=dict(l=20, r=20, t=50, b=20)
         )
         st.plotly_chart(fig3, use_container_width=True)
-```[cite: 11]
