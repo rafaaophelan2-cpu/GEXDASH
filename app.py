@@ -313,9 +313,7 @@ if "chat_messages" not in st.session_state:
 def clean_ai_response(text: str) -> str:
     if not text:
         return ""
-    # Elimina los símbolos $ que activan la notación matemática LaTeX en Streamlit
     cleaned = text.replace("$", "")
-    # Elimina delimitadores LaTeX explícitos
     cleaned = cleaned.replace(r"\(", "").replace(r"\)", "").replace(r"\[", "").replace(r"\]", "")
     return cleaned
 
@@ -693,6 +691,20 @@ if not df_curr.empty and exp_0dte is not None:
     df_curr['put_rex'] = df_curr['rho_p'] * df_curr['openInterest_p'] * 100
     df_curr['net_rex'] = df_curr['call_rex'] + df_curr['put_rex']
 
+    # --- CÁLCULO DE CHARM & CHARM EXPOSURE (CHEX) ---
+    r_rate = 0.045
+    d1_charm = (np.log(spot_price / df_curr['strike']) + (r_rate + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
+    d2_charm = d1_charm - atm_iv * np.sqrt(T_exp)
+    charm_annual = - norm.pdf(d1_charm) * (r_rate / (atm_iv * np.sqrt(T_exp)) - d2_charm / (2 * T_exp))
+    
+    # Decaimiento del Delta expresado por día (/365)
+    df_curr['charm_c'] = charm_annual / 365.0
+    df_curr['charm_p'] = charm_annual / 365.0
+
+    df_curr['call_chex'] = df_curr['charm_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
+    df_curr['put_chex'] = df_curr['charm_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
+    df_curr['net_chex'] = df_curr['call_chex'] + df_curr['put_chex']
+
     calls_dominant = df_curr[df_curr['net_gex'] > 0].sort_values('net_gex', ascending=False)
     top_calls = calls_dominant['strike'].tolist()
     cw1 = top_calls[0] if len(top_calls) > 0 else spot_price
@@ -722,6 +734,7 @@ if not df_curr.empty and exp_0dte is not None:
     net_tex_total = float(df_curr['net_tex'].sum())
     net_vex_total = float(df_curr['net_vex'].sum())
     net_rex_total = float(df_curr['net_rex'].sum())
+    net_chex_total = float(df_curr['net_chex'].sum())
 
     regime_str = "positive regime" if net_gex_total >= 0 else "negative regime"
     condition_str = "Positive – dealers long gamma, hedging dampens volatility (mean-reverting)" if net_gex_total >= 0 else "Negative – dealers short gamma, hedging amplifies trending behavior"
@@ -736,7 +749,7 @@ else:
     net_gex_total = 0.0
     call_gex_sum, put_gex_sum, total_gex = 0.0, 0.0, 0.0
     call_oi_sum, put_oi_sum, total_oi_sum = 0, 0, 0
-    net_dex_total, net_tex_total, net_vex_total, net_rex_total = 0.0, 0.0, 0.0, 0.0
+    net_dex_total, net_tex_total, net_vex_total, net_rex_total, net_chex_total = 0.0, 0.0, 0.0, 0.0, 0.0
     regime_str = "neutral regime"
     condition_str = "Neutral"
     iv_str = "20.00%"
@@ -832,7 +845,7 @@ else:
     call_drift_raw, put_drift_raw, net_drift_raw = np.array([]), np.array([]), np.array([])
     last_call_drift, last_put_drift, last_net_drift = 0.0, 0.0, 0.0
 
-# --- ASISTENTE IA ENRIQUECIDO CON NET DRIFT ---
+# --- ASISTENTE IA ENRIQUECIDO CON NET DRIFT Y CHARM ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def consultar_ia_cache(
     tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, conversion_ratio,
@@ -840,11 +853,11 @@ def consultar_ia_cache(
     call_oi_sum, put_oi_sum, total_oi_sum,
     cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
     iv_str, iv_rank_str, condition_str,
-    net_dex_total, net_tex_total, net_vex_total, net_rex_total,
+    net_dex_total, net_tex_total, net_vex_total, net_rex_total, net_chex_total,
     last_call_drift, last_put_drift, last_net_drift
 ):
     system_prompt = f"""
-    Eres un analista cuantitativo experto en estructura de opciones, Gamma Exposure (GEX), flujo de prima intradía y microestructura de mercado.
+    Eres un analista cuantitativo experto en estructura de opciones, Gamma Exposure (GEX), Charm Exposure (CHEX), flujo de prima intradía y microestructura de mercado.
     Responde en español de forma analítica, directa y profesional usando viñetas.
 
     REGLAS ESTRICTAS DE FORMATO (OBLIGATORIO):
@@ -853,11 +866,10 @@ def consultar_ia_cache(
     - MANTÉN ESPACIOS NORMALES ENTRE PALABRAS: Nunca concatenes palabras sin espacios.
     - Para referirte a montos de dinero o precios, escribe la cifra seguida de 'USD' o 'dólares' (por ejemplo: 442.2K USD).
 
-    REGLA DE CONTEXTO OBLIGATORIA (NET DRIFT):
-    Tienes acceso en tiempo real a las métricas de Net Drift calculadas dinámicamente por la aplicación. JAMÁS digas que no tienes acceso al Net Drift, que no ejecutas código externo o que desconoces esta métrica.
-    * Definición de Net Drift: Mide la presión y flujo direccional acumulado de prima en opciones intradía (Calls Drift vs Puts Drift). 
-      - Net Drift positivo = Dominancia y flujo comprador agresivo en Calls.
-      - Net Drift negativo = Acumulación y presión de flujo en Puts.
+    REGLA DE CONTEXTO OBLIGATORIA (NET DRIFT Y CHARM EXPOSURE):
+    Tienes acceso en tiempo real a las métricas de Net Drift y Charm Exposure calculadas dinámicamente. JAMÁS digas que no tienes acceso a ellas o que no ejecutas código externo.
+    * Definición de Net Drift: Mide la presión y flujo direccional acumulado de prima en opciones intradía (Calls Drift vs Puts Drift).
+    * Definición de Charm Exposure (CHEX): Mide la tasa de cambio del Delta por el paso del tiempo (Delta Decay por día). Muestra la presión de rebalanceo de cobertura que los creadores de mercado deben realizar al transcurrir el día sin cambios de precio.
 
     Métricas en tiempo real de Net Drift ({ticker_symbol}):
     - Call Drift Acumulado: {fmt_val(last_call_drift).replace('$', '')} USD
@@ -879,9 +891,10 @@ def consultar_ia_cache(
       * Theta Exposure (TEX): {net_tex_total:,.0f} USD/día
       * Vega Exposure (VEX): {net_vex_total:,.0f} USD/1% IV
       * Rho Exposure (REX): {net_rex_total:,.0f} USD/1% Tasa
+      * Charm Exposure (CHEX): {net_chex_total:.2f}M USD/día (Decaimiento de Delta por paso del tiempo)
     """
 
-    prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado integrando los niveles GEX y el Net Drift intradía para {tipo_analisis}."
+    prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado integrando los niveles GEX, Charm Exposure (CHEX) y el Net Drift intradía para {tipo_analisis}."
 
     if GROQ_API_KEY:
         try:
@@ -907,6 +920,7 @@ def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
     net_tex_val = float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0
     net_vex_val = float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0
     net_rex_val = float(df_curr['net_rex'].sum()) if not df_curr.empty and 'net_rex' in df_curr.columns else 0.0
+    net_chex_val = float(df_curr['net_chex'].sum()) if not df_curr.empty and 'net_chex' in df_curr.columns else 0.0
 
     return consultar_ia_cache(
         tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, conversion_ratio,
@@ -914,7 +928,7 @@ def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
         call_oi_sum, put_oi_sum, total_oi_sum,
         cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
         iv_str, iv_rank_str, condition_str,
-        net_dex_val, net_tex_val, net_vex_val, net_rex_val,
+        net_dex_val, net_tex_val, net_vex_val, net_rex_val, net_chex_val,
         last_call_drift, last_put_drift, last_net_drift
     )
 
@@ -934,22 +948,22 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
                     pass
             st.rerun()
 
-    st.caption("Diagnóstico en vivo del mercado según perfiles GEX y Net Drift")
+    st.caption("Diagnóstico en vivo del mercado según perfiles GEX, CHEX y Net Drift")
 
     col_btn1, col_btn2 = st.columns(2)
     if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
-        with st.spinner("Analizando pre-market y Net Drift..."):
+        with st.spinner("Analizando pre-market, Charm y Net Drift..."):
             res = consultar_ia(
                 tipo_analisis="Pre-Market",
-                mensaje_usuario="Analiza la estructura Pre-Market integrando el régimen de Gamma, niveles clave (Walls, Zero Gamma) y el comportamiento del Net Drift reciente."
+                mensaje_usuario="Analiza la estructura Pre-Market integrando el régimen de Gamma, Charm Exposure (CHEX), niveles clave (Walls, Zero Gamma) y el comportamiento del Net Drift reciente."
             )
             save_chat_message("assistant", res)
 
     if col_btn2.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
-        with st.spinner("Analizando flujo intradía y Net Drift..."):
+        with st.spinner("Analizando flujo intradía, Charm y Net Drift..."):
             res = consultar_ia(
                 tipo_analisis="Mercado Intradía",
-                mensaje_usuario="Analiza el mercado intradía evaluando el flujo en vivo de Gamma, la fuerza direccional del Net Drift (Calls vs Puts Drift) y los puntos de inflexión esperados."
+                mensaje_usuario="Analiza el mercado intradía evaluando el flujo en vivo de Gamma, decaimiento de Charm (CHEX), la fuerza direccional del Net Drift (Calls vs Puts Drift) y los puntos de inflexión esperados."
             )
             save_chat_message("assistant", res)
 
@@ -959,7 +973,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    if chat_input := st.chat_input("Escribe tu pregunta sobre GEX o Net Drift..."):
+    if chat_input := st.chat_input("Escribe tu pregunta sobre GEX, CHEX o Net Drift..."):
         save_chat_message("user", chat_input)
         with st.chat_message("user"):
             st.write(chat_input)
@@ -1604,18 +1618,19 @@ with tab_data:
     with sub_dt2:
         if not df_curr.empty:
             st.dataframe(
-                df_curr[['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex', 'net_rex']],
+                df_curr[['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex', 'net_rex', 'net_chex']],
                 use_container_width=True,
                 height=600
             )
 
 # --- 6. GREEKS ---
 with tab_greeks:
-    sub_dex, sub_tex, sub_vex, sub_rex = st.tabs([
+    sub_dex, sub_tex, sub_vex, sub_rex, sub_chex = st.tabs([
         "DELTA EXPOSURE (DEX)",
         "THETA EXPOSURE (TEX)",
         "VEGA EXPOSURE (VEX)",
-        "RHO EXPOSURE (REX)"
+        "RHO EXPOSURE (REX)",
+        "CHARM EXPOSURE (CHEX)"
     ])
     
     with sub_dex:
@@ -1693,6 +1708,55 @@ with tab_greeks:
             )
             st.plotly_chart(fig_vex, use_container_width=True)
 
+    with sub_rex:
+        if not df_curr.empty:
+            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
+            x_mid = (x_min_raw + x_max_raw) / 2.0
+            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
+            x_min_val, x_max_val = x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)
+
+            fig_rex = go.Figure()
+            fig_rex.add_trace(go.Bar(
+                x=df_sub['strike'], y=df_sub['net_rex'],
+                name="Net REX ($)", marker_color='#10B981',
+                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net REX:</b> $%{y:,.0f}<extra></extra>"
+            ))
+            fig_rex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
+
+            fig_rex.update_layout(
+                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                title="Rho Exposure Total (REX - Sensibilidad $/1% Cambio en Tasa)",
+                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
+                yaxis=dict(title="REX ($/1% Tasa)", gridcolor="rgba(255,255,255,0.05)"),
+                height=560, margin=dict(l=50, r=40, t=50, b=40)
+            )
+            st.plotly_chart(fig_rex, use_container_width=True)
+
+    with sub_chex:
+        if not df_curr.empty:
+            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            x_min_raw, x_max_raw = df_sub['strike'].min(), df_sub['strike'].max()
+            x_mid = (x_min_raw + x_max_raw) / 2.0
+            x_half_span = ((x_max_raw - x_min_raw) / 2.0) + 1.0
+            x_min_val, x_max_val = x_mid - (x_half_span * 2.0), x_mid + (x_half_span * 2.0)
+
+            fig_chex = go.Figure()
+            fig_chex.add_trace(go.Bar(
+                x=df_sub['strike'], y=df_sub['net_chex'],
+                name="Net CHEX ($M)", marker_color='#EC4899',
+                hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net CHEX:</b> $%{y:.2f}M/día<extra></extra>"
+            ))
+            fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text="Spot", annotation_position="top")
+
+            fig_chex.update_layout(
+                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                title="Charm Exposure Total (CHEX - Sensibilidad de Delta por Paso del Tiempo $/día)",
+                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", range=[x_min_val, x_max_val]),
+                yaxis=dict(title="CHEX ($ Millones/día)", gridcolor="rgba(255,255,255,0.05)"),
+                height=560, margin=dict(l=50, r=40, t=50, b=40)
+            )
+            st.plotly_chart(fig_chex, use_container_width=True)
 
 # --- 7. SURFACE 3D ---
 with tab_3d:
