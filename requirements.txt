@@ -9,4 +9,3 @@ supabase
 groq
 supabase
 extra-streamlit-components
-streamlit-autorefresh
