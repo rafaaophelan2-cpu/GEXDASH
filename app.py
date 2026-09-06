@@ -209,16 +209,16 @@ st.markdown("""
         border-color: rgba(59, 130, 246, 0.4);
     }
     .metric-card-greeks {
-        background: rgba(13, 17, 26, 0.85);
+        background: rgba(22, 13, 35, 0.85);
         backdrop-filter: blur(12px);
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(168, 85, 247, 0.35);
         border-radius: 8px;
         padding: 10px 14px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        box-shadow: 0 4px 20px rgba(168, 85, 247, 0.15);
         transition: border-color 0.2s ease;
     }
     .metric-card-greeks:hover {
-        border-color: rgba(59, 130, 246, 0.4);
+        border-color: rgba(168, 85, 247, 0.7);
     }
     .metric-label {
         font-family: 'JetBrains Mono', monospace;
@@ -1668,21 +1668,16 @@ with tab_drift:
 
 # --- 4. GREEKS (GRIEGAS) ---
 with tab_greeks:
-    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📊 PERFILES DE EXPOSICIÓN DE GRIEGAS</h3>", unsafe_allow_html=True)
+    st.markdown('<div class="depth-frame" style="border: 1px solid rgba(168, 85, 247, 0.25);">', unsafe_allow_html=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#C084FC; font-size:1.1rem; letter-spacing:0.5px;'>📊 PERFILES DE EXPOSICIÓN DE GRIEGAS</h3>", unsafe_allow_html=True)
 
-    c_dex = "#10B981" if net_dex_total >= 0 else "#EF4444"
-    c_tex = "#10B981" if net_tex_total >= 0 else "#EF4444"
-    c_vex = "#10B981" if net_vex_total >= 0 else "#EF4444"
-    c_chex = "#10B981" if net_chex_total >= 0 else "#EF4444"
-    c_vanna = "#10B981" if net_vanna_total >= 0 else "#EF4444"
-
+    # Color signature único para las Griegas (A855F7 / C084FC)
     g1, g2, g3, g4, g5 = st.columns(5)
-    g1.markdown(f'<div class="metric-card-greeks"><div class="metric-label">Net Delta (DEX)</div><div class="metric-value" style="color:{c_dex};">${net_dex_total:.2f}M</div><div class="metric-sub">Delta Exposure</div></div>', unsafe_allow_html=True)
-    g2.markdown(f'<div class="metric-card-greeks"><div class="metric-label">Net Theta (TEX)</div><div class="metric-value" style="color:{c_tex};">${net_tex_total:,.0f}</div><div class="metric-sub">Decaimiento / Día</div></div>', unsafe_allow_html=True)
-    g3.markdown(f'<div class="metric-card-greeks"><div class="metric-label">Net Vega (VEX)</div><div class="metric-value" style="color:{c_vex};">${net_vex_total:,.0f}</div><div class="metric-sub">Por +1% IV</div></div>', unsafe_allow_html=True)
-    g4.markdown(f'<div class="metric-card-greeks"><div class="metric-label">Net Charm (CHEX)</div><div class="metric-value" style="color:{c_chex};">${net_chex_total:.2f}M</div><div class="metric-sub">Decaimiento Delta / Día</div></div>', unsafe_allow_html=True)
-    g5.markdown(f'<div class="metric-card-greeks"><div class="metric-label">Net Vanna (VANNA)</div><div class="metric-value" style="color:{c_vanna};">${net_vanna_total:.2f}M</div><div class="metric-sub">Sensibilidad a Vol</div></div>', unsafe_allow_html=True)
+    g1.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Delta (DEX)</div><div class="metric-value" style="color:#A855F7;">${net_dex_total:.2f}M</div><div class="metric-sub" style="color:#E9D5FF;">Griega Delta Exposure</div></div>', unsafe_allow_html=True)
+    g2.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Theta (TEX)</div><div class="metric-value" style="color:#A855F7;">${net_tex_total:,.0f}</div><div class="metric-sub" style="color:#E9D5FF;">Griega Decaimiento / Día</div></div>', unsafe_allow_html=True)
+    g3.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Vega (VEX)</div><div class="metric-value" style="color:#A855F7;">${net_vex_total:,.0f}</div><div class="metric-sub" style="color:#E9D5FF;">Griega Por +1% IV</div></div>', unsafe_allow_html=True)
+    g4.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Charm (CHEX)</div><div class="metric-value" style="color:#A855F7;">${net_chex_total:.2f}M</div><div class="metric-sub" style="color:#E9D5FF;">Griega Decaimiento Delta / Día</div></div>', unsafe_allow_html=True)
+    g5.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Vanna (VANNA)</div><div class="metric-value" style="color:#A855F7;">${net_vanna_total:.2f}M</div><div class="metric-sub" style="color:#E9D5FF;">Griega Sensibilidad a Vol</div></div>', unsafe_allow_html=True)
 
     st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
 
@@ -1694,229 +1689,49 @@ with tab_greeks:
         df_grk_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
         xaxis_kwargs_grk = safe_strike_range(df_grk_sub)
 
-        # --- SUB 1: DELTA (DEX) ---
         with sub_grk1:
             if not df_grk_sub.empty and 'net_dex' in df_grk_sub.columns:
-                # 1. NET DEX PROFILE (Verde positiva / Rojo negativa)
-                fig_net_dex = go.Figure()
-                colors_net_dex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_dex']]
-                fig_net_dex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['net_dex'],
-                    marker_color=colors_net_dex, name="Net DEX",
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net DEX:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_net_dex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_net_dex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="<b>Net Delta Exposure (Net DEX Profile)</b>",
-                    xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk),
-                    yaxis=dict(title="Net DEX ($M)"), height=420, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_net_dex, use_container_width=True)
-
-                st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-
-                # 2. CALLS vs PUTS DEX (Paleta: Celeste claro Calls / Azul oscuro Puts)
                 fig_dex = go.Figure()
-                fig_dex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['call_dex'],
-                    name="Call DEX", marker_color='#38BDF8',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Call DEX:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                fig_dex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['put_dex'],
-                    name="Put DEX", marker_color='#1E3A8A',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Put DEX:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_dex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_dex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="<b>Call DEX vs Put DEX por Strike</b>", barmode='relative',
-                    xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk),
-                    yaxis=dict(title="DEX ($M)"), height=420, margin=dict(l=50, r=40, t=50, b=40)
-                )
+                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_dex'], name="Call DEX", marker_color='#A855F7'))
+                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_dex'], name="Put DEX", marker_color='#7E22CE'))
+                if spot_price > 0: fig_dex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_dex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Delta Exposure (DEX) por Strike (M USD)</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
                 st.plotly_chart(fig_dex, use_container_width=True)
 
-        # --- SUB 2: THETA (TEX) ---
         with sub_grk2:
             if not df_grk_sub.empty and 'net_tex' in df_grk_sub.columns:
-                # 1. NET TEX PROFILE (Verde positiva / Rojo negativa)
-                fig_net_tex = go.Figure()
-                colors_net_tex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_tex']]
-                fig_net_tex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['net_tex'],
-                    marker_color=colors_net_tex, name="Net TEX",
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net TEX:</b> $%{y:,.0f}<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_net_tex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_net_tex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="<b>Net Theta Exposure (Net TEX Profile)</b>",
-                    xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk),
-                    yaxis=dict(title="Net TEX ($)"), height=420, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_net_tex, use_container_width=True)
-
-                st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-
-                # 2. CALLS vs PUTS TEX (Paleta: Ámbar claro Calls / Marrón oscuro Puts)
                 fig_tex = go.Figure()
-                fig_tex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['call_tex'],
-                    name="Call TEX", marker_color='#FBBF24',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Call TEX:</b> $%{y:,.0f}<extra></extra>"
-                ))
-                fig_tex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['put_tex'],
-                    name="Put TEX", marker_color='#78350F',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Put TEX:</b> $%{y:,.0f}<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_tex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_tex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="<b>Call TEX vs Put TEX por Strike</b>", barmode='relative',
-                    xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk),
-                    yaxis=dict(title="TEX ($)"), height=420, margin=dict(l=50, r=40, t=50, b=40)
-                )
+                fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_tex'], name="Call TEX", marker_color='#A855F7'))
+                fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_tex'], name="Put TEX", marker_color='#7E22CE'))
+                if spot_price > 0: fig_tex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_tex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Theta Exposure (TEX - Decaimiento USD/Día)</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
                 st.plotly_chart(fig_tex, use_container_width=True)
 
-        # --- SUB 3: VEGA (VEX) ---
         with sub_grk3:
             if not df_grk_sub.empty and 'net_vex' in df_grk_sub.columns:
-                # 1. NET VEX PROFILE (Verde positiva / Rojo negativa)
-                fig_net_vex = go.Figure()
-                colors_net_vex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vex']]
-                fig_net_vex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['net_vex'],
-                    marker_color=colors_net_vex, name="Net VEX",
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net VEX:</b> $%{y:,.0f}<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_net_vex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_net_vex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="<b>Net Vega Exposure (Net VEX Profile)</b>",
-                    xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk),
-                    yaxis=dict(title="Net VEX ($)"), height=420, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_net_vex, use_container_width=True)
-
-                st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-
-                # 2. CALLS vs PUTS VEX (Paleta: Turquesa claro Calls / Verde azulado oscuro Puts)
                 fig_vex = go.Figure()
-                fig_vex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['call_vex'],
-                    name="Call VEX", marker_color='#2DD4BF',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Call VEX:</b> $%{y:,.0f}<extra></extra>"
-                ))
-                fig_vex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['put_vex'],
-                    name="Put VEX", marker_color='#134E4A',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Put VEX:</b> $%{y:,.0f}<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_vex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_vex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="<b>Call VEX vs Put VEX por Strike</b>", barmode='relative',
-                    xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk),
-                    yaxis=dict(title="VEX ($)"), height=420, margin=dict(l=50, r=40, t=50, b=40)
-                )
+                fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vex'], name="Call VEX", marker_color='#C084FC'))
+                fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vex'], name="Put VEX", marker_color='#6B21A8'))
+                if spot_price > 0: fig_vex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_vex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Vega Exposure (VEX - Sensibilidad a +1% IV)</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
                 st.plotly_chart(fig_vex, use_container_width=True)
 
-        # --- SUB 4: CHARM (CHEX) ---
         with sub_grk4:
             if not df_grk_sub.empty and 'net_chex' in df_grk_sub.columns:
-                # 1. NET CHEX PROFILE (Verde positiva / Rojo negativa)
-                fig_net_chex = go.Figure()
-                colors_net_chex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_chex']]
-                fig_net_chex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['net_chex'],
-                    marker_color=colors_net_chex, name="Net CHEX",
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net CHEX:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_net_chex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_net_chex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="<b>Net Charm Exposure (Net CHEX Profile)</b>",
-                    xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk),
-                    yaxis=dict(title="Net CHEX ($M)"), height=420, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_net_chex, use_container_width=True)
-
-                st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-
-                # 2. CALLS vs PUTS CHEX (Paleta: Naranja claro Calls / Óxido oscuro Puts)
                 fig_chex = go.Figure()
-                fig_chex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['call_chex'],
-                    name="Call CHEX", marker_color='#FB923C',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Call CHEX:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                fig_chex.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['put_chex'],
-                    name="Put CHEX", marker_color='#7C2D12',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Put CHEX:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_chex.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="<b>Call CHEX vs Put CHEX por Strike</b>", barmode='relative',
-                    xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk),
-                    yaxis=dict(title="CHEX ($M)"), height=420, margin=dict(l=50, r=40, t=50, b=40)
-                )
+                colors_chex = ['#A855F7' if v >= 0 else '#6B21A8' for v in df_grk_sub['net_chex']]
+                fig_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_chex'], marker_color=colors_chex, name="Net CHEX"))
+                if spot_price > 0: fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_chex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Charm Exposure (CHEX - Decaimiento de Delta por Tiempo M USD/Día)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
                 st.plotly_chart(fig_chex, use_container_width=True)
 
-        # --- SUB 5: VANNA (VANNA EX) ---
         with sub_grk5:
             if not df_grk_sub.empty and 'net_vanna' in df_grk_sub.columns:
-                # 1. NET VANNA PROFILE (Verde positiva / Rojo negativa)
-                fig_net_vanna = go.Figure()
-                colors_net_vanna = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vanna']]
-                fig_net_vanna.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['net_vanna'],
-                    marker_color=colors_net_vanna, name="Net VANNA",
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net VANNA:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_net_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_net_vanna.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="<b>Net Vanna Exposure (Net VANNA Profile)</b>",
-                    xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk),
-                    yaxis=dict(title="Net VANNA ($M)"), height=420, margin=dict(l=50, r=40, t=50, b=40)
-                )
-                st.plotly_chart(fig_net_vanna, use_container_width=True)
-
-                st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-
-                # 2. CALLS vs PUTS VANNA (Paleta: Rosado Calls #F472B6 / Morado Puts #581C87)
                 fig_vanna = go.Figure()
-                fig_vanna.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['call_vanna'],
-                    name="Call VANNA", marker_color='#F472B6',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Call VANNA:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                fig_vanna.add_trace(go.Bar(
-                    x=df_grk_sub['strike'], y=df_grk_sub['put_vanna'],
-                    name="Put VANNA", marker_color='#581C87',
-                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Put VANNA:</b> $%{y:.2f}M<extra></extra>"
-                ))
-                if spot_price > 0:
-                    fig_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_vanna.update_layout(
-                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="<b>Call VANNA vs Put VANNA por Strike</b>", barmode='relative',
-                    xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk),
-                    yaxis=dict(title="VANNA ($M)"), height=420, margin=dict(l=50, r=40, t=50, b=40)
-                )
+                colors_vanna = ['#C084FC' if v >= 0 else '#581C87' for v in df_grk_sub['net_vanna']]
+                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_vanna'], marker_color=colors_vanna, name="Net VANNA"))
+                if spot_price > 0: fig_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Vanna Exposure (VANNA - Sensibilidad Delta a IV)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
                 st.plotly_chart(fig_vanna, use_container_width=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1944,32 +1759,66 @@ with tab_back:
 # --- 6. DATA (SNAPSHOT REPORT + IA ANALYSIS) ---
 with tab_data:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📊 RESUMEN DE DATOS Y REPORTE DE ANÁLISIS IA</h3>", unsafe_allow_html=True)
+    
+    # ENCABEZADO REPORTE
+    st.markdown(f"""
+        <div class="data-summary-box">
+            <h3 style="margin-top:0; color:#60A5FA; font-family:'JetBrains Mono'; font-weight:800; font-size:1.2rem; letter-spacing:0.5px;">
+                📄 GEX QUANT TERMINAL - INTRADAY SNAPSHOT REPORT
+            </h3>
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-top:15px; font-family:'JetBrains Mono'; font-size:0.82rem;">
+                <div><b>Symbol:</b> {ticker_symbol} | <b>Spot Price:</b> ${spot_price:.2f} USD</div>
+                <div><b>Implied Volatility (IV):</b> {iv_str} ({iv_rank_str})</div>
+                <div><b>Market Regime:</b> <span style="color:{'#10B981' if net_gex_total>=0 else '#EF4444'}; font-weight:bold;">{regime_str}</span></div>
+                <div><b>Open Interest:</b> Calls: {call_oi_sum:,} | Puts: {put_oi_sum:,} | Total: {total_oi_sum:,}</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
-    col_d1, col_d2 = st.columns(2)
+    # TABLA 1: NIVELES CLAVE Y PERFIL GEX
+    st.markdown("<h4 style='color:#F0F6FC; font-family:\"JetBrains Mono\"; font-weight:700;'>📊 TABLA 1: NIVELES CLAVE Y PERFIL GEX</h4>", unsafe_allow_html=True)
+    t1_data = [
+        {"Métrica / Nivel": "Net GEX Total", "Valor (USD)": fmt_val(net_gex_total), "Notas / Descripción": "Positive regime (Dampens volatility)" if net_gex_total >= 0 else "Negative regime (Amplifies volatility)"},
+        {"Métrica / Nivel": "Call GEX", "Valor (USD)": fmt_val(call_gex_sum), "Notas / Descripción": "Total Call Gamma Exposure"},
+        {"Métrica / Nivel": "Put GEX", "Valor (USD)": fmt_val(put_gex_sum), "Notas / Descripción": "Total Put Gamma Exposure"},
+        {"Métrica / Nivel": "Call Wall 1 (CW1)", "Valor (USD)": f"${cw1:.0f}", "Notas / Descripción": "Major Resistance Level"},
+        {"Métrica / Nivel": "Call Wall 2 (CW2)", "Valor (USD)": f"${cw2:.0f}", "Notas / Descripción": "Secondary Resistance Level"},
+        {"Métrica / Nivel": "Call Wall 3 (CW3)", "Valor (USD)": f"${cw3:.0f}", "Notas / Descripción": "Upper Extension Level"},
+        {"Métrica / Nivel": "Put Wall 1 (PW1)", "Valor (USD)": f"${pw1:.0f}", "Notas / Descripción": "Major Support Level"},
+        {"Métrica / Nivel": "Put Wall 2 (PW2)", "Valor (USD)": f"${pw2:.0f}", "Notas / Descripción": "Secondary Support Level"},
+        {"Métrica / Nivel": "Put Wall 3 (PW3)", "Valor (USD)": f"${pw3:.0f}", "Notas / Descripción": "Lower Extension Level"},
+        {"Métrica / Nivel": "Zero Gamma (Flip)", "Valor (USD)": f"${zero_gamma:.2f}", "Notas / Descripción": "Pivotal Shift Threshold (Regime Change)"}
+    ]
+    st.dataframe(pd.DataFrame(t1_data), use_container_width=True)
 
-    with col_d1:
-        st.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.85rem; font-weight:700; color:#60A5FA;'>MÉTRICAS CLAVE DE OPCIONES</p>", unsafe_allow_html=True)
-        summary_metrics = {
-            "Métrica": ["Symbol", "Spot Price", "Régimen Gamma", "Net GEX Total", "Call GEX Total", "Put GEX Total", "Zero Gamma Level", "IV ATM"],
-            "Valor": [ticker_symbol, f"${spot_price:.2f}", regime_str.upper(), fmt_val(net_gex_total), fmt_val(call_gex_sum), fmt_val(put_gex_sum), f"${zero_gamma:.2f}", iv_str]
-        }
-        st.table(pd.DataFrame(summary_metrics))
+    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
 
-    with col_d2:
-        st.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.85rem; font-weight:700; color:#60A5FA;'>MÉTRICAS DE EXPOSICIÓN DE GRIEGAS</p>", unsafe_allow_html=True)
-        greek_metrics = {
-            "Griega": ["Net Delta (DEX)", "Net Theta (TEX)", "Net Vega (VEX)", "Net Charm (CHEX)", "Net Vanna (VANNA)"],
-            "Valor": [f"${net_dex_total:.2f}M", f"${net_tex_total:,.0f}", f"${net_vex_total:,.0f}", f"${net_chex_total:.2f}M", f"${net_vanna_total:.2f}M"]
-        }
-        st.table(pd.DataFrame(greek_metrics))
+    # TABLA 2: RESUMEN DE GRIEGAS (GREEKS SUMMARY)
+    st.markdown("<h4 style='color:#C084FC; font-family:\"JetBrains Mono\"; font-weight:700;'>📊 TABLA 2: RESUMEN DE GRIEGAS (GREEKS SUMMARY)</h4>", unsafe_allow_html=True)
+    net_dex_val = float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0
+    net_tex_val = float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0
+    net_vex_val = float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0
+    net_chex_val = float(df_curr['net_chex'].sum()) if not df_curr.empty and 'net_chex' in df_curr.columns else 0.0
+    net_vanna_val = float(df_curr['net_vanna'].sum()) if not df_curr.empty and 'net_vanna' in df_curr.columns else 0.0
 
-    st.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
-    st.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.85rem; font-weight:700; color:#F0F6FC;'>TABLA DE CADENA DE OPCIONES Y GRIEGAS POR STRIKE</p>", unsafe_allow_html=True)
+    t2_data = [
+        {"Griega": "Delta Exposure (DEX)", "Valor Total": f"${net_dex_val:.2f}M USD", "Descripción": "Sensibilidad direccional acumulada de deltas"},
+        {"Griega": "Theta Exposure (TEX)", "Valor Total": f"${net_tex_val:,.0f} USD/día", "Descripción": "Decaimiento por paso del tiempo en primas"},
+        {"Griega": "Vega Exposure (VEX)", "Valor Total": f"${net_vex_val:,.0f} USD / 1% IV", "Descripción": "Sensibilidad al cambio de volatilidad implícita"},
+        {"Griega": "Charm Exposure (CHEX)", "Valor Total": f"${net_chex_val:.2f}M USD/día", "Descripción": "Decaimiento de Delta por paso del tiempo"},
+        {"Griega": "Vanna Exposure (VANNA)", "Valor Total": f"${net_vanna_val:.2f}M USD", "Descripción": "Sensibilidad de Delta ante cambios en IV"}
+    ]
+    st.dataframe(pd.DataFrame(t2_data), use_container_width=True)
 
-    if not df_curr.empty:
-        st.dataframe(df_curr, use_container_width=True)
-    else:
-        st.info("No hay datos detallados de cadena disponibles.")
+    st.markdown("<hr style='border-color:rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
+    st.markdown("<h4 style='color:#F0F6FC; font-family:\"JetBrains Mono\"; font-weight:700;'>🧠 REPORTE Y DIAGNÓSTICO ESTRATÉGICO CON IA</h4>", unsafe_allow_html=True)
+
+    if st.button("⚡ GENERAR INFORME CUANTITATIVO COMPLETO", key="btn_gen_data_ai", use_container_width=True):
+        with st.spinner("Generando informe analítico cuantitativo..."):
+            informe_res = consultar_ia(
+                tipo_analisis="Informe Data Snapshot",
+                mensaje_usuario="Genera el Diagnóstico Estratégico completo con base en los datos del Snapshot Report, perfiles GEX y Griegas."
+            )
+            st.markdown(informe_res)
 
     st.markdown('</div>', unsafe_allow_html=True)
