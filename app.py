@@ -285,11 +285,11 @@ def login_user(username_in, password_in):
                         "last_seen": datetime.now().isoformat()
                     }).execute()
                 except Exception as e_sess:
-                    log_to_console("Active Sessions Upsert Error", e_sess)
+                    log_to_console("Active Sessions Upsert Error", str(e_sess))
                     
                 return True, f"Bienvenido {res.data[0].get('name', user_clean)}"
         except Exception as e:
-            log_to_console("Supabase Login Error", e)
+            log_to_console("Supabase Login Error", str(e))
 
     valid_users = st.secrets.get("USERS", {})
     if isinstance(valid_users, dict):
@@ -359,7 +359,7 @@ def save_chat_message(role: str, content: str):
                     "content": cleaned_content
                 }).execute()
             except Exception as e:
-                log_to_console("Supabase Chat Insert Error", e)
+                log_to_console("Supabase Chat Insert Error", str(e))
         threading.Thread(target=push_chat_bg, daemon=True).start()
 
 TOKEN_PATH = "schwab_token.json"
@@ -384,7 +384,7 @@ def get_schwab_client():
             enforce_enums=False
         )
     except Exception as e:
-        log_to_console("Conexión Schwab API Init", e)
+        log_to_console("Conexión Schwab API Init", str(e))
         return None
 
 client = get_schwab_client()
@@ -411,7 +411,7 @@ def get_gemini_client():
         try:
             return genai.Client(api_key=GEMINI_API_KEY)
         except Exception as e:
-            log_to_console("Inicialización Gemini Client", e)
+            log_to_console("Inicialización Gemini Client", str(e))
             return None
     return None
 
@@ -422,7 +422,7 @@ def query_groq(system_prompt, user_prompt, api_key):
         from groq import Groq
         groq_client = Groq(api_key=api_key)
         completion = groq_client.chat.completions.create(
-            model="qwen/qwen3.8-27b",
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -430,13 +430,13 @@ def query_groq(system_prompt, user_prompt, api_key):
             temperature=0.3
         )
         return clean_ai_response(completion.choices[0].message.content)
-    except ImportError:
+    except Exception:
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "qwen/qwen3.8-27b",
+            "model": "llama-3.3-70b-versatile",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -496,16 +496,19 @@ def fetch_history_schwab(symbol):
         return pd.DataFrame()
     try:
         today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        freq_type = getattr(client.PriceHistory.FrequencyType, 'MINUTE', 'minute') if hasattr(client, 'PriceHistory') else 'minute'
+        freq = getattr(client.PriceHistory.Frequency, 'EVERY_MINUTE', 'every_minute') if hasattr(client, 'PriceHistory') else 'every_minute'
+
         resp = client.get_price_history(
             symbol,
             start_datetime=today_start,
-            frequency_type=client.PriceHistory.FrequencyType.MINUTE,
-            frequency=client.PriceHistory.Frequency.EVERY_MINUTE,
+            frequency_type=freq_type,
+            frequency=freq,
             need_extended_hours_data=False
         )
         if resp.status_code == 200:
             data = resp.json()
-            candles = data.get("candles", [])
+            candles = data.get("candles", []) if isinstance(data, dict) else []
             if candles:
                 df = pd.DataFrame(candles)
                 df['datetime'] = pd.to_datetime(df['datetime'], unit='ms', utc=True)
@@ -516,7 +519,7 @@ def fetch_history_schwab(symbol):
                 }, inplace=True)
                 return df
     except Exception as e:
-        log_to_console("fetch_history_schwab", e)
+        log_to_console("fetch_history_schwab", str(e))
     return pd.DataFrame()
 
 @st.cache_data(ttl=15)
@@ -525,9 +528,10 @@ def fetch_option_chain_schwab(symbol, strikes_count):
         return {}
     try:
         today = datetime.now()
+        contract_type = getattr(client.Options.ContractType, 'ALL', 'ALL') if hasattr(client, 'Options') else 'ALL'
         resp = client.get_option_chain(
             symbol=symbol,
-            contract_type=client.Options.ContractType.ALL,
+            contract_type=contract_type,
             strike_count=strikes_count,
             from_date=today,
             to_date=today + timedelta(days=7)
@@ -535,7 +539,7 @@ def fetch_option_chain_schwab(symbol, strikes_count):
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
-        log_to_console("fetch_option_chain_schwab", e)
+        log_to_console("fetch_option_chain_schwab", str(e))
     return {}
 
 @st.cache_data(ttl=15)
@@ -546,12 +550,13 @@ def fetch_nq_price_schwab():
         resp = client.get_quote("/NQ")
         if resp.status_code == 200:
             data = resp.json()
-            quote_data = data.get("/NQ", {}).get("quote", {})
+            nq_data = data.get("/NQ", {}) if isinstance(data, dict) else {}
+            quote_data = nq_data.get("quote", {}) if isinstance(nq_data, dict) else {}
             price = float(quote_data.get("lastPrice", quote_data.get("closePrice", 0.0)))
             if price > 0:
                 return price
     except Exception as e:
-        log_to_console("fetch_nq_price_schwab", e)
+        log_to_console("fetch_nq_price_schwab", str(e))
     return 0.0
 
 # --- PROCESAMIENTO Y DETECCIÓN ESTADO ONLINE / OFFLINE ---
@@ -561,7 +566,7 @@ ref_today = now_tz.floor('D').tz_localize(None)
 hist_raw = fetch_history_schwab(ticker_symbol)
 chain_raw = fetch_option_chain_schwab(ticker_symbol, strike_range)
 
-spot_price = float(chain_raw.get("underlyingPrice", 0.0))
+spot_price = float(chain_raw.get("underlyingPrice", 0.0)) if isinstance(chain_raw, dict) else 0.0
 if (spot_price <= 0 or np.isnan(spot_price)) and not hist_raw.empty and 'Close' in hist_raw:
     spot_price = float(hist_raw['Close'].dropna().iloc[-1])
 
@@ -569,16 +574,16 @@ def parse_schwab_chain(chain_data):
     if not isinstance(chain_data, dict):
         return pd.DataFrame(), None
         
-    call_map = chain_data.get('callExpDateMap', {})
-    put_map = chain_data.get('putExpDateMap', {})
+    call_map = chain_data.get('callExpDateMap') or {}
+    put_map = chain_data.get('putExpDateMap') or {}
     
     all_exp_keys = sorted(list(set(list(call_map.keys()) + list(put_map.keys()))))
     if not all_exp_keys:
         return pd.DataFrame(), None
     
     selected_exp = all_exp_keys[0]
-    calls_for_exp = call_map.get(selected_exp, {})
-    puts_for_exp = put_map.get(selected_exp, {})
+    calls_for_exp = call_map.get(selected_exp) or {}
+    puts_for_exp = put_map.get(selected_exp) or {}
     
     records = {}
     
@@ -630,7 +635,7 @@ def parse_schwab_chain(chain_data):
         records[strike]['vega_p'] = opt.get('vega', 0.0)
         records[strike]['iv_p'] = extract_iv(opt)
 
-    df = pd.DataFrame(list(records.values())).sort_values('strike').reset_index(drop=True)
+    df = pd.DataFrame(list(records.values())).sort_values('strike').reset_index(drop=True) if records else pd.DataFrame()
     return df, selected_exp
 
 df_curr, exp_0dte = parse_schwab_chain(chain_raw)
@@ -731,9 +736,13 @@ def recalculate_gex_for_spot(df_input, spot_t, T_exp, iv):
         return df_input
     
     df_out = df_input.copy()
+    iv = max(float(iv), 0.001)
+    T_exp = max(float(T_exp), 1e-5)
     
     def calc_gamma_dyn(r):
-        K = r['strike']
+        K = float(r['strike'])
+        if K <= 0 or spot_t <= 0:
+            return 0.0
         d1 = (np.log(spot_t / K) + (0.045 + 0.5 * iv**2) * T_exp) / (iv * np.sqrt(T_exp))
         return norm.pdf(d1) / (spot_t * iv * np.sqrt(T_exp))
 
@@ -774,14 +783,17 @@ if not df_curr.empty and exp_0dte is not None:
     df_curr['net_vex'] = df_curr['call_vex'] + df_curr['put_vex']
 
     r_rate = 0.045
-    d1_charm = (np.log(spot_price / df_curr['strike']) + (r_rate + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
+    valid_strikes = df_curr['strike'] > 0
+    d1_charm = (np.log(spot_price / df_curr.loc[valid_strikes, 'strike']) + (r_rate + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
     d2_charm = d1_charm - atm_iv * np.sqrt(T_exp)
     
     call_charm_annual = - norm.pdf(d1_charm) * (r_rate / (atm_iv * np.sqrt(T_exp)) - d2_charm / (2.0 * T_exp))
     put_charm_annual = call_charm_annual + (r_rate * np.exp(-r_rate * T_exp) * norm.cdf(-d1_charm))
 
-    df_curr['charm_c'] = call_charm_annual / 365.0
-    df_curr['charm_p'] = put_charm_annual / 365.0
+    df_curr.loc[valid_strikes, 'charm_c'] = call_charm_annual / 365.0
+    df_curr.loc[valid_strikes, 'charm_p'] = put_charm_annual / 365.0
+    df_curr['charm_c'] = df_curr['charm_c'].fillna(0.0)
+    df_curr['charm_p'] = df_curr['charm_p'].fillna(0.0)
 
     df_curr['call_chex'] = df_curr['charm_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
     df_curr['put_chex'] = df_curr['charm_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
@@ -800,8 +812,8 @@ if not df_curr.empty and exp_0dte is not None:
     pw3 = top_puts[2] if len(top_puts) > 2 else pw2
 
     df_curr['cum_gex'] = df_curr['net_gex'].cumsum()
-    zero_gamma_idx = (df_curr['cum_gex'].abs()).idxmin()
-    zero_gamma = df_curr.loc[zero_gamma_idx]['strike'] if zero_gamma_idx in df_curr.index else spot_price
+    zero_gamma_idx = (df_curr['cum_gex'].abs()).idxmin() if not df_curr.empty else None
+    zero_gamma = df_curr.loc[zero_gamma_idx]['strike'] if zero_gamma_idx is not None and zero_gamma_idx in df_curr.index else spot_price
 
     net_gex_total = float(df_curr['net_gex'].sum())
     call_gex_sum = float(df_curr['call_gex'].sum())
@@ -951,6 +963,8 @@ elif is_cloud_backup and jsonbin_history_data:
 else:
     full_timestamps, full_spots = [], []
     h_1m_reindexed = pd.DataFrame()
+    min_strike = 0
+    max_strike = 100
     fine_strikes = np.linspace(0, 100, 50)
     Z_matrix_real = np.zeros((0,0))
     closes_drift, vols_drift = np.array([]), np.array([])
@@ -1007,7 +1021,7 @@ def consultar_ia_cache(
             raw_res = query_groq(system_prompt, prompt_final, GROQ_API_KEY)
             return clean_ai_response(raw_res)
         except Exception as e_groq:
-            log_to_console("Groq AI Engine", e_groq)
+            log_to_console("Groq AI Engine", str(e_groq))
 
     if ai_client:
         try:
@@ -1017,7 +1031,7 @@ def consultar_ia_cache(
             )
             return clean_ai_response(response.text)
         except Exception as e_gemini:
-            log_to_console("Gemini AI Engine", e_gemini)
+            log_to_console("Gemini AI Engine", str(e_gemini))
 
     return "Ocurrió un error al procesar la solicitud de IA."
 
@@ -1319,9 +1333,9 @@ with tab_live:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
     st.markdown(f"<h3 style='margin-top:0; font-weight:700; color:#F0F6FC; font-size:1.1rem;'>🌊 Real-Time Gamma Flow ({tz_choice})</h3>", unsafe_allow_html=True)
 
-    if len(full_timestamps) > 0 and Z_matrix_real.shape[1] > 0:
+    if len(full_timestamps) > 0 and Z_matrix_real.shape[0] > 0 and Z_matrix_real.shape[1] > 0:
         custom_hover_matrix = [[fmt_val(val) for val in row] for row in Z_matrix_real]
-        max_real_abs = float(np.max(np.abs(Z_matrix_real))) if np.max(np.abs(Z_matrix_real)) > 0 else 1.0
+        max_real_abs = float(np.max(np.abs(Z_matrix_real))) if Z_matrix_real.size > 0 and np.max(np.abs(Z_matrix_real)) > 0 else 1.0
         Z_matrix_scaled = Z_matrix_real / max_real_abs
 
         fig_live = go.Figure()
@@ -1540,18 +1554,17 @@ with tab_back:
 
         day_snaps = jsonbin_history_data.get(selected_date, [])
         
-        if "bt_snap_index" not in st.session_state:
-            st.session_state.bt_snap_index = len(day_snaps) - 1 if day_snaps else 0
+        if not day_snaps:
+            st.info("No existen registros para la fecha seleccionada.")
+        else:
+            if "bt_snap_index" not in st.session_state:
+                st.session_state.bt_snap_index = len(day_snaps) - 1
 
-        col_bt1, col_bt2, col_bt3 = st.columns([2, 1, 1])
-        with col_bt1:
-            if day_snaps:
-                max_snap = len(day_snaps) - 1
-                if st.session_state.bt_snap_index > max_snap:
-                    st.session_state.bt_snap_index = max_snap
-                elif st.session_state.bt_snap_index < 0:
-                    st.session_state.bt_snap_index = 0
-                    
+            col_bt1, col_bt2, col_bt3 = st.columns([2, 1, 1])
+            with col_bt1:
+                max_snap = max(0, len(day_snaps) - 1)
+                st.session_state.bt_snap_index = min(max(0, st.session_state.bt_snap_index), max_snap)
+                
                 st.session_state.bt_snap_index = st.slider(
                     "SNAPSHOTS DISPONIBLES",
                     min_value=0,
@@ -1559,21 +1572,19 @@ with tab_back:
                     value=st.session_state.bt_snap_index,
                     format="Snap %d"
                 )
-        with col_bt2:
-            st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-            if st.button("◀ Back", use_container_width=True, key="bt_back_btn"):
-                st.session_state.bt_snap_index = max(0, st.session_state.bt_snap_index - bt_tf)
-                st.rerun()
-        with col_bt3:
-            st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-            if st.button("Next ▶", use_container_width=True, key="bt_next_btn"):
-                if day_snaps:
+            with col_bt2:
+                st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+                if st.button("◀ Back", use_container_width=True, key="bt_back_btn"):
+                    st.session_state.bt_snap_index = max(0, st.session_state.bt_snap_index - bt_tf)
+                    st.rerun()
+            with col_bt3:
+                st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
+                if st.button("Next ▶", use_container_width=True, key="bt_next_btn"):
                     st.session_state.bt_snap_index = min(len(day_snaps) - 1, st.session_state.bt_snap_index + bt_tf)
                     st.rerun()
 
-        st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        if day_snaps:
             sliced_snaps = day_snaps[:st.session_state.bt_snap_index + 1]
             current_snap = sliced_snaps[-1]
 
@@ -1602,7 +1613,7 @@ with tab_back:
             if bt_Z_matrix.size > 0 and bt_Z_matrix.shape[1] > 1:
                 bt_Z_matrix = gaussian_filter(bt_Z_matrix, sigma=(0.5, 0.8))
 
-            max_abs_bt = float(np.max(np.abs(bt_Z_matrix))) if np.max(np.abs(bt_Z_matrix)) > 0 else 1.0
+            max_abs_bt = float(np.max(np.abs(bt_Z_matrix))) if bt_Z_matrix.size > 0 and np.max(np.abs(bt_Z_matrix)) > 0 else 1.0
             bt_Z_scaled = bt_Z_matrix / max_abs_bt
 
             custom_hover_bt = [[fmt_val(val) for val in row] for row in bt_Z_matrix]
@@ -1698,8 +1709,9 @@ with tab_data:
 
     with sub_dt2:
         if not df_curr.empty:
+            cols_to_display = [col for col in ['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex', 'net_chex'] if col in df_curr.columns]
             st.dataframe(
-                df_curr[['strike', 'openInterest_c', 'openInterest_p', 'iv_c', 'iv_p', 'net_gex', 'net_dex', 'net_tex', 'net_vex', 'net_chex']],
+                df_curr[cols_to_display],
                 use_container_width=True,
                 height=600
             )
