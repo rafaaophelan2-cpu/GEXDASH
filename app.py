@@ -1923,105 +1923,61 @@ with tab_back:
         df_back['time_lbl'] = pd.to_datetime(df_back['created_at']).dt.strftime('%m-%d %H:%M')
 
         fig_back = make_subplots(specs=[[{"secondary_y": True}]])
-        fig_back.add_trace(go.Scatter(
-            x=df_back['time_lbl'], y=df_back['spot'],
-            name="Spot Price", line=dict(color='#3B82F6', width=2)
-        ), secondary_y=False)
-
-        fig_back.add_trace(go.Bar(
-            x=df_back['time_lbl'], y=df_back['net_gex'],
-            name="Net GEX", marker_color=['#10B981' if v >= 0 else '#EF4444' for v in df_back['net_gex']],
-            opacity=0.6
-        ), secondary_y=True)
-
-        fig_back.update_layout(
-            template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-            title="<b>Evolución Temporal de Spot vs Net GEX</b>",
-            height=500, margin=dict(l=50, r=50, t=50, b=40)
+        fig_back.add_trace(
+            go.Bar(
+                x=df_back['time_lbl'],
+                y=df_back['net_gex'],
+                name="Net GEX",
+                marker_color=['#10B981' if v >= 0 else '#EF4444' for v in df_back['net_gex']],
+                customdata=[fmt_val(v) for v in df_back['net_gex']],
+                hovertemplate="<b>Hora:</b> %{x}<br><b>Net GEX:</b> %{customdata}<extra></extra>"
+            ),
+            secondary_y=False
         )
+        fig_back.add_trace(
+            go.Scatter(
+                x=df_back['time_lbl'],
+                y=df_back['spot'],
+                name="Spot Price",
+                line=dict(color='#3B82F6', width=2),
+                hovertemplate="<b>Spot Price:</b> $%{y:.2f}<extra></extra>"
+            ),
+            secondary_y=True
+        )
+        fig_back.update_layout(
+            template="plotly_dark",
+            plot_bgcolor='#06080D',
+            paper_bgcolor='#06080D',
+            title="<b>Evolución de Net GEX vs Spot Price</b>",
+            height=520,
+            margin=dict(l=50, r=50, t=50, b=50)
+        )
+        fig_back.update_xaxes(title_text="Fecha / Hora", gridcolor="rgba(255,255,255,0.05)")
+        fig_back.update_yaxes(title_text="Net GEX ($)", secondary_y=False, gridcolor="rgba(255,255,255,0.05)")
+        fig_back.update_yaxes(title_text="Spot Price ($)", secondary_y=True, gridcolor="rgba(255,255,255,0.05)")
         st.plotly_chart(fig_back, use_container_width=True)
     else:
-        st.info("Registrando historial de snapshots en Supabase/JSONBin. En unos minutos estará disponible el historial completo.")
-
+        st.info("No hay suficiente historial registrado en Supabase para mostrar el análisis de Backgamma.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 6. DATA (RESUMEN EJECUTIVO DE DATOS Y EXPORTACIÓN) ---
+# --- 6. DATA ---
 with tab_data:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.2rem;'>📑 GEX & MARKET DATA SUMMARY</h3>", unsafe_allow_html=True)
-    
-    st.markdown("""
-        <div class="data-summary-box">
-            <h4 style="color:#60A5FA; margin-top:0; font-family:'JetBrains Mono';">📌 RESUMEN DE ESTRUCTURA Y GRECAS EN TIEMPO REAL</h4>
-            <p style="color:#8B949E; font-size:0.85rem;">Datos procesados para análisis institucional Pre-Market e Intradía.</p>
-        </div>
-    """, unsafe_allow_html=True)
-
-    summary_data = {
-        "Métrica / Parámetro": [
-            "Ticker Subyacente", "Precio Spot Actual", "Ratio NQ / QQQ",
-            "Net GEX Total", "Call GEX Acumulado", "Put GEX Acumulado", "Total GEX Absoluto",
-            "Call Wall Principal (CW1)", "Put Wall Principal (PW1)", "Zero Gamma (Flip Level)",
-            "Net Delta Exposure (DEX)", "Net Theta Exposure (TEX)", "Net Vega Exposure (VEX)",
-            "Net Charm Exposure (CHEX)", "Net Vanna Exposure (VANNA)",
-            "Call Drift Acumulado", "Put Drift Acumulado", "Net Drift Intradía",
-            "Volatilidad Implícita ATM", "Percentil IV Rank"
-        ],
-        "Valor Actual": [
-            ticker_symbol, f"${spot_price:.2f}", f"{conversion_ratio:.4f}",
-            fmt_val(net_gex_total), fmt_val(call_gex_sum), fmt_val(put_gex_sum), fmt_val(total_gex, show_sign=False),
-            f"${cw1:.0f}", f"${pw1:.0f}", f"${zero_gamma:.2f}",
-            f"${net_dex_total:.2f}M", f"${net_tex_total:,.0f} / día", f"${net_vex_total:,.0f} / +1% IV",
-            f"${net_chex_total:.2f}M / día", f"${net_vanna_total:.2f}M",
-            fmt_val(last_call_drift), fmt_val(last_put_drift), fmt_val(last_net_drift),
-            iv_str, iv_rank_str
-        ],
-        "Estado / Condición": [
-            "Activo", "En Vivo", "Normalizado",
-            regime_str.upper(), "Dominio Calls", "Dominio Puts", "Volumen Total",
-            "Resistencia Gamma", "Soporte Gamma", "Nivel Pivote",
-            "Direccionalidad Delta", "Decaimiento Temporal", "Riesgo de Volatilidad",
-            "Erosión Temporal Delta", "Sensibilidad Vol-Spot",
-            "Flujo Comprador Calls", "Flujo Comprador Puts", "Presión Direccional",
-            "Volatilidad Actual", condition_str
-        ]
-    }
-
-    df_summary = pd.DataFrame(summary_data)
-    st.table(df_summary)
-
-    st.markdown("<hr style='border-color:rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
-    st.markdown("<h4 style='color:#F0F6FC; font-weight:700;'>DATOS DETALLADOS POR STRIKE</h4>", unsafe_allow_html=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>💾 TABLA DE DATOS DE OPCIONES</h3>", unsafe_allow_html=True)
 
     if not df_curr.empty:
-        df_export = df_curr[[
-            'strike', 'openInterest_c', 'openInterest_p', 'gamma_c', 'gamma_p',
-            'net_gex', 'call_gex', 'put_gex', 'net_dex', 'net_tex', 'net_vex', 'net_chex', 'net_vanna'
-        ]].copy()
-        
-        st.dataframe(df_export.style.format({
-            'strike': '${:.2f}',
-            'openInterest_c': '{:,}',
-            'openInterest_p': '{:,}',
-            'gamma_c': '{:.4f}',
-            'gamma_p': '{:.4f}',
-            'net_gex': '${:,.0f}',
-            'call_gex': '${:,.0f}',
-            'put_gex': '${:,.0f}',
-            'net_dex': '{:.2f}',
-            'net_tex': '{:.2f}',
-            'net_vex': '{:.2f}',
-            'net_chex': '{:.2f}',
-            'net_vanna': '{:.2f}'
-        }), use_container_width=True, height=400)
-
-        csv_data = df_export.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 DESCARGAR DATOS COMPLETOS EN CSV",
-            data=csv_data,
-            file_name=f"GEX_Data_{ticker_symbol}_{now_tz.strftime('%Y%m%d_%H%M')}.csv",
-            mime="text/csv",
-            use_container_width=True
+        st.dataframe(
+            df_curr,
+            use_container_width=True,
+            height=500
         )
-
+        csv_data = df_curr.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Descargar CSV de Opciones",
+            data=csv_data,
+            file_name=f"gex_data_{ticker_symbol}_{today_date_str}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.warning("No hay datos disponibles para mostrar.")
     st.markdown('</div>', unsafe_allow_html=True)
