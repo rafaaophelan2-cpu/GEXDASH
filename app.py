@@ -208,6 +208,18 @@ st.markdown("""
     .metric-card:hover {
         border-color: rgba(59, 130, 246, 0.4);
     }
+    .metric-card-greeks {
+        background: rgba(22, 13, 35, 0.85);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(168, 85, 247, 0.35);
+        border-radius: 8px;
+        padding: 10px 14px;
+        box-shadow: 0 4px 20px rgba(168, 85, 247, 0.15);
+        transition: border-color 0.2s ease;
+    }
+    .metric-card-greeks:hover {
+        border-color: rgba(168, 85, 247, 0.7);
+    }
     .metric-label {
         font-family: 'JetBrains Mono', monospace;
         font-size: 0.65rem;
@@ -1244,7 +1256,7 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
   - **PW2 / PW3 (Soportes de Extensión)**: ${pw2_v:.0f} USD / ${pw3_v:.0f} USD
 * **Flip Level / Pivote Técnico**: **${zg_v:.2f} USD**. Mantenerse por encima mantiene el control en rango; perforar a la baja liberará volatilidad a favor de los vendedores.
 
-#### 3. Análisis de Flujo y Grecas
+#### 3. Análisis de Flujo y Griegas
 * **Delta Exposure (DEX)**: {dex_v:.2f}M USD. Muestra un sesgo direccional {"positivo" if dex_v >= 0 else "negativo"}.
 * **Charm Exposure (CHEX)**: {chex_v:.2f}M USD/día. Decaimiento de delta por tiempo atrae el precio hacia strikes con mayor acumulación de OI.
 * **Vanna Exposure (VANNA)**: {vanna_v:.2f}M USD. Mide el impacto en deltas si la IV comprime o se expande en la sesión.
@@ -1282,7 +1294,7 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
     2. Si el usuario solicita un análisis ("Pre-Market", "Intradía", "Análisis" o preguntas de mercado), DEBES responder obligatoriamente siguiendo exactamente los 4 puntos estructurados:
        **1. Estado Actual y Régimen del Mercado**
        **2. Puntos Clave de Inflexión y Niveles Operativos**
-       **3. Análisis de Flujo y Grecas (DEX, VEX, CHEX, VANNA, Net Drift)**
+       **3. Análisis de Flujo y Griegas (DEX, VEX, CHEX, VANNA, Net Drift)**
        **4. Escenario Más Probable y Proyección Estratégica** (indica si se prevé rango o expansión, zonas de rebote, pivote en Zero Gamma e invalidación).
     3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$).
     """
@@ -1332,14 +1344,14 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
                     pass
             st.rerun()
 
-    st.caption("Diagnóstico en vivo del mercado según perfiles GEX, Grecas y Net Drift")
+    st.caption("Diagnóstico en vivo del mercado según perfiles GEX, Griegas y Net Drift")
 
     col_btn1, col_btn2, col_btn3 = st.columns(3)
     if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
         with st.spinner("Analizando pre-market..."):
             res = consultar_ia(
                 tipo_analisis="Pre-Market",
-                mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando el régimen de Gamma, niveles clave (Walls y Zero Gamma), Grecas y Net Drift."
+                mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando el régimen de Gamma, niveles clave (Walls y Zero Gamma), Griegas y Net Drift."
             )
             save_chat_message("assistant", res)
 
@@ -1365,7 +1377,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    if chat_input := st.chat_input("Pregunta sobre GEX, Grecas o niveles de mercado..."):
+    if chat_input := st.chat_input("Pregunta sobre GEX, Griegas o niveles de mercado..."):
         save_chat_message("user", chat_input)
         with st.chat_message("user"):
             st.write(chat_input)
@@ -1654,17 +1666,18 @@ with tab_drift:
         
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 4. GREEKS ---
+# --- 4. GREEKS (GRIEGAS) ---
 with tab_greeks:
-    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📊 PERFILES DE EXPOSICIÓN DE GRECAS</h3>", unsafe_allow_html=True)
+    st.markdown('<div class="depth-frame" style="border: 1px solid rgba(168, 85, 247, 0.25);">', unsafe_allow_html=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#C084FC; font-size:1.1rem; letter-spacing:0.5px;'>📊 PERFILES DE EXPOSICIÓN DE GRIEGAS</h3>", unsafe_allow_html=True)
 
+    # Color signature único para las Griegas (A855F7 / C084FC)
     g1, g2, g3, g4, g5 = st.columns(5)
-    g1.markdown(f'<div class="metric-card"><div class="metric-label">Net Delta (DEX)</div><div class="metric-value" style="color:#60A5FA;">${net_dex_total:.2f}M</div><div class="metric-sub">Delta Exposure</div></div>', unsafe_allow_html=True)
-    g2.markdown(f'<div class="metric-card"><div class="metric-label">Net Theta (TEX)</div><div class="metric-value" style="color:#F59E0B;">${net_tex_total:,.0f}</div><div class="metric-sub">Decaimiento / Día</div></div>', unsafe_allow_html=True)
-    g3.markdown(f'<div class="metric-card"><div class="metric-label">Net Vega (VEX)</div><div class="metric-value" style="color:#8B5CF6;">${net_vex_total:,.0f}</div><div class="metric-sub">Por +1% IV</div></div>', unsafe_allow_html=True)
-    g4.markdown(f'<div class="metric-card"><div class="metric-label">Net Charm (CHEX)</div><div class="metric-value" style="color:#10B981;">${net_chex_total:.2f}M</div><div class="metric-sub">Decaimiento Delta / Día</div></div>', unsafe_allow_html=True)
-    g5.markdown(f'<div class="metric-card"><div class="metric-label">Net Vanna (VANNA)</div><div class="metric-value" style="color:#EC4899;">${net_vanna_total:.2f}M</div><div class="metric-sub">Sensibilidad Delta a Vol</div></div>', unsafe_allow_html=True)
+    g1.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Delta (DEX)</div><div class="metric-value" style="color:#A855F7;">${net_dex_total:.2f}M</div><div class="metric-sub" style="color:#E9D5FF;">Griega Delta Exposure</div></div>', unsafe_allow_html=True)
+    g2.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Theta (TEX)</div><div class="metric-value" style="color:#A855F7;">${net_tex_total:,.0f}</div><div class="metric-sub" style="color:#E9D5FF;">Griega Decaimiento / Día</div></div>', unsafe_allow_html=True)
+    g3.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Vega (VEX)</div><div class="metric-value" style="color:#A855F7;">${net_vex_total:,.0f}</div><div class="metric-sub" style="color:#E9D5FF;">Griega Por +1% IV</div></div>', unsafe_allow_html=True)
+    g4.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Charm (CHEX)</div><div class="metric-value" style="color:#A855F7;">${net_chex_total:.2f}M</div><div class="metric-sub" style="color:#E9D5FF;">Griega Decaimiento Delta / Día</div></div>', unsafe_allow_html=True)
+    g5.markdown(f'<div class="metric-card-greeks"><div class="metric-label" style="color:#C084FC;">Net Vanna (VANNA)</div><div class="metric-value" style="color:#A855F7;">${net_vanna_total:.2f}M</div><div class="metric-sub" style="color:#E9D5FF;">Griega Sensibilidad a Vol</div></div>', unsafe_allow_html=True)
 
     st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
 
@@ -1679,8 +1692,8 @@ with tab_greeks:
         with sub_grk1:
             if not df_grk_sub.empty and 'net_dex' in df_grk_sub.columns:
                 fig_dex = go.Figure()
-                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_dex'], name="Call DEX", marker_color='#10B981'))
-                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_dex'], name="Put DEX", marker_color='#EF4444'))
+                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_dex'], name="Call DEX", marker_color='#A855F7'))
+                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_dex'], name="Put DEX", marker_color='#7E22CE'))
                 if spot_price > 0: fig_dex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
                 fig_dex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Delta Exposure (DEX) por Strike (M USD)</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
                 st.plotly_chart(fig_dex, use_container_width=True)
@@ -1688,8 +1701,8 @@ with tab_greeks:
         with sub_grk2:
             if not df_grk_sub.empty and 'net_tex' in df_grk_sub.columns:
                 fig_tex = go.Figure()
-                fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_tex'], name="Call TEX", marker_color='#10B981'))
-                fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_tex'], name="Put TEX", marker_color='#EF4444'))
+                fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_tex'], name="Call TEX", marker_color='#A855F7'))
+                fig_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_tex'], name="Put TEX", marker_color='#7E22CE'))
                 if spot_price > 0: fig_tex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
                 fig_tex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Theta Exposure (TEX - Decaimiento USD/Día)</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
                 st.plotly_chart(fig_tex, use_container_width=True)
@@ -1697,8 +1710,8 @@ with tab_greeks:
         with sub_grk3:
             if not df_grk_sub.empty and 'net_vex' in df_grk_sub.columns:
                 fig_vex = go.Figure()
-                fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vex'], name="Call VEX", marker_color='#8B5CF6'))
-                fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vex'], name="Put VEX", marker_color='#F43F5E'))
+                fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vex'], name="Call VEX", marker_color='#C084FC'))
+                fig_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vex'], name="Put VEX", marker_color='#6B21A8'))
                 if spot_price > 0: fig_vex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
                 fig_vex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Vega Exposure (VEX - Sensibilidad a +1% IV)</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
                 st.plotly_chart(fig_vex, use_container_width=True)
@@ -1706,7 +1719,7 @@ with tab_greeks:
         with sub_grk4:
             if not df_grk_sub.empty and 'net_chex' in df_grk_sub.columns:
                 fig_chex = go.Figure()
-                colors_chex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_chex']]
+                colors_chex = ['#A855F7' if v >= 0 else '#6B21A8' for v in df_grk_sub['net_chex']]
                 fig_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_chex'], marker_color=colors_chex, name="Net CHEX"))
                 if spot_price > 0: fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
                 fig_chex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Charm Exposure (CHEX - Decaimiento de Delta por Tiempo M USD/Día)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
@@ -1715,7 +1728,7 @@ with tab_greeks:
         with sub_grk5:
             if not df_grk_sub.empty and 'net_vanna' in df_grk_sub.columns:
                 fig_vanna = go.Figure()
-                colors_vanna = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vanna']]
+                colors_vanna = ['#C084FC' if v >= 0 else '#581C87' for v in df_grk_sub['net_vanna']]
                 fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_vanna'], marker_color=colors_vanna, name="Net VANNA"))
                 if spot_price > 0: fig_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
                 fig_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Vanna Exposure (VANNA - Sensibilidad Delta a IV)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=480)
@@ -1747,7 +1760,7 @@ with tab_back:
 with tab_data:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
     
-    # ENCABEZADO REPORTE (IMAGEN 1)
+    # ENCABEZADO REPORTE
     st.markdown(f"""
         <div class="data-summary-box">
             <h3 style="margin-top:0; color:#60A5FA; font-family:'JetBrains Mono'; font-weight:800; font-size:1.2rem; letter-spacing:0.5px;">
@@ -1774,43 +1787,38 @@ with tab_data:
         {"Métrica / Nivel": "Put Wall 1 (PW1)", "Valor (USD)": f"${pw1:.0f}", "Notas / Descripción": "Major Support Level"},
         {"Métrica / Nivel": "Put Wall 2 (PW2)", "Valor (USD)": f"${pw2:.0f}", "Notas / Descripción": "Secondary Support Level"},
         {"Métrica / Nivel": "Put Wall 3 (PW3)", "Valor (USD)": f"${pw3:.0f}", "Notas / Descripción": "Lower Extension Level"},
-        {"Métrica / Nivel": "Zero Gamma (Flip Level)", "Valor (USD)": f"${zero_gamma:.2f}", "Notas / Descripción": "Threshold between positive/negative regime"}
+        {"Métrica / Nivel": "Zero Gamma (Flip)", "Valor (USD)": f"${zero_gamma:.2f}", "Notas / Descripción": "Pivotal Shift Threshold (Regime Change)"}
     ]
-    st.table(pd.DataFrame(t1_data))
+    st.dataframe(pd.DataFrame(t1_data), use_container_width=True)
 
-    st.markdown("<div style='height:15px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
 
-    # TABLA 2: GRECAS Y RESUMEN DE FLUJO
-    st.markdown("<h4 style='color:#F0F6FC; font-family:\"JetBrains Mono\"; font-weight:700;'>⚡ TABLA 2: GRECAS Y RESUMEN DE FLUJO</h4>", unsafe_allow_html=True)
+    # TABLA 2: RESUMEN DE GRIEGAS (GREEKS SUMMARY)
+    st.markdown("<h4 style='color:#C084FC; font-family:\"JetBrains Mono\"; font-weight:700;'>📊 TABLA 2: RESUMEN DE GRIEGAS (GREEKS SUMMARY)</h4>", unsafe_allow_html=True)
+    net_dex_val = float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0
+    net_tex_val = float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0
+    net_vex_val = float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0
+    net_chex_val = float(df_curr['net_chex'].sum()) if not df_curr.empty and 'net_chex' in df_curr.columns else 0.0
+    net_vanna_val = float(df_curr['net_vanna'].sum()) if not df_curr.empty and 'net_vanna' in df_curr.columns else 0.0
+
     t2_data = [
-        {"Métrica": "Delta Exposure (DEX)", "Valor": f"${net_dex_total:.2f}M USD", "Descripción": "Net directional exposure"},
-        {"Métrica": "Theta Exposure (TEX)", "Valor": f"${net_tex_total:,.0f} USD/día", "Descripción": "Time decay exposure"},
-        {"Métrica": "Vega Exposure (VEX)", "Valor": f"${net_vex_total:,.0f} USD / 1% IV", "Descripción": "Volatility sensitivity"},
-        {"Métrica": "Charm Exposure (CHEX)", "Valor": f"${net_chex_total:.2f}M USD/día", "Descripción": "Delta decay per day"},
-        {"Métrica": "Vanna Exposure (VANNA)", "Valor": f"${net_vanna_total:.2f}M USD", "Descripción": "Delta sensitivity to IV"},
-        {"Métrica": "Net Premium Drift", "Valor": f"{fmt_val(last_net_drift)} USD", "Descripción": "Cumulative net flow bias"}
+        {"Griega": "Delta Exposure (DEX)", "Valor Total": f"${net_dex_val:.2f}M USD", "Descripción": "Sensibilidad direccional acumulada de deltas"},
+        {"Griega": "Theta Exposure (TEX)", "Valor Total": f"${net_tex_val:,.0f} USD/día", "Descripción": "Decaimiento por paso del tiempo en primas"},
+        {"Griega": "Vega Exposure (VEX)", "Valor Total": f"${net_vex_val:,.0f} USD / 1% IV", "Descripción": "Sensibilidad al cambio de volatilidad implícita"},
+        {"Griega": "Charm Exposure (CHEX)", "Valor Total": f"${net_chex_val:.2f}M USD/día", "Descripción": "Decaimiento de Delta por paso del tiempo"},
+        {"Griega": "Vanna Exposure (VANNA)", "Valor Total": f"${net_vanna_val:.2f}M USD", "Descripción": "Sensibilidad de Delta ante cambios en IV"}
     ]
-    st.table(pd.DataFrame(t2_data))
+    st.dataframe(pd.DataFrame(t2_data), use_container_width=True)
 
-    st.markdown("<hr style='border-color:rgba(255,255,255,0.1); margin: 25px 0;'>", unsafe_allow_html=True)
+    st.markdown("<hr style='border-color:rgba(255,255,255,0.08);'>", unsafe_allow_html=True)
+    st.markdown("<h4 style='color:#F0F6FC; font-family:\"JetBrains Mono\"; font-weight:700;'>🧠 REPORTE Y DIAGNÓSTICO ESTRATÉGICO CON IA</h4>", unsafe_allow_html=True)
 
-    # SECCIÓN ANÁLISIS ESTRATÉGICO Y PROBABILIDADES (IMAGEN 2)
-    st.markdown("<h3 style='color:#F59E0B; font-family:\"Plus Jakarta Sans\"; font-weight:800;'>🤖 DIAGNÓSTICO ESTRATÉGICO Y PROBABILIDADES DE MERCADO</h3>", unsafe_allow_html=True)
-    
-    col_act_btn, col_act_info = st.columns([3, 7])
-    with col_act_btn:
-        if st.button("⚡ GENERAR / ACTUALIZAR ANÁLISIS ESTRATÉGICO", key="btn_gen_data_analysis_tab", use_container_width=True):
-            st.session_state.data_tab_analysis = consultar_ia(
-                tipo_analisis="Diagnóstico Estratégico",
-                mensaje_usuario="Proporciona el Diagnóstico Estratégico y Probabilidades de Mercado completo basándote en los datos actuales."
+    if st.button("⚡ GENERAR INFORME CUANTITATIVO COMPLETO", key="btn_gen_data_ai", use_container_width=True):
+        with st.spinner("Generando informe analítico cuantitativo..."):
+            informe_res = consultar_ia(
+                tipo_analisis="Informe Data Snapshot",
+                mensaje_usuario="Genera el Diagnóstico Estratégico completo con base en los datos del Snapshot Report, perfiles GEX y Griegas."
             )
+            st.markdown(informe_res)
 
-    if "data_tab_analysis" not in st.session_state or not st.session_state.data_tab_analysis:
-        st.session_state.data_tab_analysis = consultar_ia(
-            tipo_analisis="Diagnóstico Estratégico",
-            mensaje_usuario="Proporciona el Diagnóstico Estratégico y Probabilidades de Mercado completo basándote en los datos actuales."
-        )
-
-    st.markdown(st.session_state.data_tab_analysis)
-    
     st.markdown('</div>', unsafe_allow_html=True)
