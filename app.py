@@ -77,7 +77,17 @@ def fetch_supabase_latest_snapshot(symbol="QQQ"):
         if res.data and len(res.data) > 0:
             return res.data[0]
     except Exception as e:
-        log_to_console("Supabase Snapshot Fetch Error", str(e))
+        try:
+            # Fallback si created_at no existe en la tabla
+            res = supabase.table("gex_intraday") \
+                .select("*") \
+                .eq("symbol", symbol) \
+                .limit(1) \
+                .execute()
+            if res.data and len(res.data) > 0:
+                return res.data[0]
+        except Exception as e2:
+            log_to_console("Supabase Snapshot Fetch Error", str(e2))
     return None
 
 @st.cache_data(ttl=2)
@@ -94,7 +104,17 @@ def fetch_supabase_gex_history(symbol="QQQ", limit=100):
         if res.data:
             return res.data
     except Exception as e:
-        log_to_console("Supabase History Fetch Error", str(e))
+        try:
+            # Fallback si created_at no existe en la tabla
+            res = supabase.table("gex_intraday") \
+                .select("*") \
+                .eq("symbol", symbol) \
+                .limit(limit) \
+                .execute()
+            if res.data:
+                return res.data
+        except Exception as e2:
+            log_to_console("Supabase History Fetch Error", str(e2))
     return []
 
 # --- INICIALIZACIÓN DE ESTADOS Y SISTEMA DE LOGS ---
@@ -400,7 +420,12 @@ if "chat_messages" not in st.session_state:
             if res.data:
                 st.session_state.chat_messages = res.data
         except Exception:
-            pass
+            try:
+                res = supabase.table("chat_messages").select("role, content").limit(50).execute()
+                if res.data:
+                    st.session_state.chat_messages = res.data
+            except Exception:
+                pass
 
 def clean_ai_response(text: str) -> str:
     if not text:
@@ -802,7 +827,7 @@ if not h_1m.empty and is_online:
 elif is_cloud_backup and latest_supabase_snap:
     supabase_history = fetch_supabase_gex_history(ticker_symbol, limit=390)
     if supabase_history:
-        full_timestamps = [pd.to_datetime(s.get("created_at")).strftime('%H:%M') for s in supabase_history]
+        full_timestamps = [pd.to_datetime(s.get("time", s.get("created_at", datetime.now()))).strftime('%H:%M') for s in supabase_history]
         full_spots = [s.get("spot", spot_price) for s in supabase_history]
         if full_spots and full_spots[-1] > 0:
             spot_price = float(full_spots[-1])
@@ -1177,7 +1202,7 @@ if not jsonbin_history_data and not latest_supabase_snap:
         })
     jsonbin_history_data = {mock_date: mock_snaps}
 
-# --- ASISTENTE IA Y PROMPT DE CONTEXTO DÍAS PASADOS + INTRADÍA ---
+# --- ASISTENTE IA Y PROMPT CONOCIMIENTO COMPLETO DEL WEB ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def consultar_ia_cache(
     tipo_analisis, mensaje_usuario, ticker_symbol, spot_price, conversion_ratio,
@@ -1190,47 +1215,56 @@ def consultar_ia_cache(
     history_context_str
 ):
     system_prompt = f"""
-    Eres un analista cuantitativo experto de nivel institucional especializado en estructura de mercado, Gamma Exposure (GEX), Charm Exposure (CHEX), Vanna Exposure, flujos de prima intradía (Net Drift) y microestructura de opciones.
+    Eres un asistente de IA conversacional y analista cuantitativo experto de nivel institucional integrado en el GEX Quant Terminal.
+    Tu rol es responder a cualquier consulta del usuario, desde saludos cotidianos ("Hola", "¿Cómo estás?") hasta explicaciones avanzadas sobre estructura de mercado, opciones, cálculo de Grecas y análisis del terminal.
 
-    DICCIONARIO DE DATOS Y CONCEPTOS CLAVE DEL TERMINAL:
-    - Spot Price: Precio actual en tiempo real del activo.
-    - Ratio NQ/QQQ: Relación de precios entre el futuro Nasdaq-100 y el ETF QQQ.
-    - Net GEX Total: Exposición Neta a Gamma. Si es Positiva (dealers long gamma), los market makers compran caídas y venden subidas (comportamiento defensivo/mean-reverting). Si es Negativa (dealers short gamma), los market makers aceleran las tendencias vendiendo caídas y comprando subidas.
-    - Call/Put Walls: CW1, CW2, CW3 son niveles clave de resistencia por concentración masiva de Call Gamma. PW1, PW2, PW3 son niveles clave de soporte por Put Gamma.
-    - Zero Gamma (Flip Level): El nivel exacto donde la exposición neta a gamma cambia de positiva a negativa.
-    - DEX (Delta Exposure): Exposición Neta a Delta en millones de USD por cada cambio del 1% en el subyacente.
-    - TEX (Theta Exposure): Decaimiento temporal acumulado diario en USD por erosión del valor tiempo.
-    - VEX (Vega Exposure): Sensibilidad en USD por cada incremento de +1% en Volatilidad Implícita (IV).
-    - CHEX (Charm Exposure): Sensibilidad del Delta respecto al paso del tiempo (decaimiento temporal de deltas por día).
-    - VANNA Exposure: Sensibilidad del Delta respecto a cambios en la Volatilidad Implícita (o Vega respecto a cambios en Spot).
-    - Net Drift: Flujo acumulado en USD de compras/ventas activas de primas en Calls vs Puts durante la sesión intradía.
-    - Live Gamma Flow: Distribución en tiempo real de barreras de gamma por strike a lo largo del tiempo.
+    MODO CONVERSACIONAL Y DE SALUDO:
+    - Si el usuario te da un saludo simple (ej. "Hola", "Buenas", "¿Qué puedes hacer?"), responde de forma amigable, natural, educada y concisa, ofreciéndote a ayudarle con el análisis de opciones ({ticker_symbol}) o responder preguntas generales. No fuerces un reporte técnico completo a menos que te lo solicite.
 
-    HISTORIAL DE DÍAS PASADOS Y SNAPSHOTS PREVIOS:
-    {history_context_str}
+    MEMORIA Y CONOCIMIENTO EN TIEMPO REAL DEL TERMINAL ({ticker_symbol}):
+    Tienes acceso directo a TODOS los datos calculados en vivo en la pantalla actual de la web. NO necesitas consultar bases de datos externas ni librerías adicionales:
 
-    MÉTRICAS DEL MERCADO ACTUAL EN TIEMPO REAL ({ticker_symbol}):
-    - Spot Price: {spot_price:.2f} USD (NQ Ratio: {conversion_ratio:.4f})
-    - Interés Abierto (OI): Calls = {call_oi_sum:,} | Puts = {put_oi_sum:,} | Total = {total_oi_sum:,}
-    - Net GEX Total: {fmt_val(net_gex_total).replace('$', '')} USD ({regime_str})
-    - Desglose GEX: Call GEX = {fmt_val(call_gex_sum).replace('$', '')} USD | Put GEX = {fmt_val(put_gex_sum).replace('$', '')} USD | Total GEX = {fmt_val(total_gex, show_sign=False).replace('$', '')} USD
-    - Call Walls: CW1 = {cw1:.0f} USD, CW2 = {cw2:.0f} USD, CW3 = {cw3:.0f} USD
-    - Put Walls: PW1 = {pw1:.0f} USD, PW2 = {pw2:.0f} USD, PW3 = {pw3:.0f} USD
-    - Zero Gamma (Flip Level): {zero_gamma:.2f} USD
-    - Volatilidad: IV ATM = {iv_str} | Percentil IV Rank = {iv_rank_str}
-    - Condición de Gamma: {condition_str}
-    - Grecas Neta:
-      * Delta Exposure (DEX): {net_dex_total:.2f}M USD
-      * Theta Exposure (TEX): {net_tex_total:,.0f} USD/día
-      * Vega Exposure (VEX): {net_vex_total:,.0f} USD/1% IV
-      * Charm Exposure (CHEX): {net_chex_total:.2f}M USD/día
-      * Vanna Exposure (VANNA): {net_vanna_total:.2f}M USD
-    - Net Drift Intradía: Call Drift = {fmt_val(last_call_drift).replace('$', '')} USD | Put Drift = {fmt_val(last_put_drift).replace('$', '')} USD | Net Drift Total = {fmt_val(last_net_drift).replace('$', '')} USD
+    1. PRECIO Y ESTRUCTURA GENERAL:
+       - Ticker: {ticker_symbol} | Spot Price: {spot_price:.2f} USD | NQ Ratio: {conversion_ratio:.4f}
+       - Volatilidad Implícita (IV ATM): {iv_str} | Percentil Rank: {iv_rank_str}
+       - Régimen de Gamma: {regime_str} ({condition_str})
+       - Interés Abierto Total: Calls={call_oi_sum:,}, Puts={put_oi_sum:,}, Total={total_oi_sum:,}
 
-    REGLAS ESTRICTAS DE FORMATO Y ESTILO:
-    - PROHIBIDO USAR NOTACIÓN LATEX O SIMBOLOS DE DÓLAR SEGUIDOS EN FÓRMULAS: NUNCA utilices el símbolo de dólar ($) ni delimitadores LaTeX ($$, \(, \)).
-    - Para precios o dinero escribe la cifra seguida de 'USD' o 'dólares'.
-    - Responde en español técnico, claro y profesional usando viñetas y negritas.
+    2. PROFILE GEX Y NIVELES CLAVE:
+       - Net GEX Total: {fmt_val(net_gex_total).replace('$', '')} USD
+       - Call GEX: {fmt_val(call_gex_sum).replace('$', '')} USD | Put GEX: {fmt_val(put_gex_sum).replace('$', '')} USD | Total GEX: {fmt_val(total_gex, show_sign=False).replace('$', '')} USD
+       - Call Walls (Resistencias): CW1={cw1:.0f} USD, CW2={cw2:.0f} USD, CW3={cw3:.0f} USD
+       - Put Walls (Soportes): PW1={pw1:.0f} USD, PW2={pw2:.0f} USD, PW3={pw3:.0f} USD
+       - Zero Gamma Level (Flip Level): {zero_gamma:.2f} USD
+
+    3. EXPOSICIÓN DE GRECAS ACUMULADAS:
+       - Delta Exposure (DEX): {net_dex_total:.2f}M USD
+       - Theta Exposure (TEX): {net_tex_total:,.0f} USD/día
+       - Vega Exposure (VEX): {net_vex_total:,.0f} USD/1% IV
+       - Charm Exposure (CHEX): {net_chex_total:.2f}M USD/día (decaimiento de delta por tiempo)
+       - Vanna Exposure (VANNA): {net_vanna_total:.2f}M USD (sensibilidad de delta ante IV)
+
+    4. FLUJO DE PRIMA (NET DRIFT):
+       - Call Premium Drift: {fmt_val(last_call_drift).replace('$', '')} USD
+       - Put Premium Drift: {fmt_val(last_put_drift).replace('$', '')} USD
+       - Net Drift Acumulado: {fmt_val(last_net_drift).replace('$', '')} USD
+
+    5. HISTORIAL RECIENTE REGISTRADO:
+       {history_context_str}
+
+    CONOCIMIENTO FORMAL Y FÓRMULAS INTERNAS DE MEMORIA:
+    - Net GEX por Strike = (Call Gamma * Call OI - Put Gamma * Put OI) * (Spot^2) * 0.01
+    - DEX (Delta Exposure) = Delta * OI * 100 * Spot / 1M
+    - TEX (Theta Exposure) = Theta * OI * 100
+    - VEX (Vega Exposure) = Vega * OI * 100
+    - CHEX (Charm) = Charm * OI * 100 * Spot / 1M (donde Charm es dDelta/dt)
+    - VANNA = Vanna * OI * 100 * Spot / 1M (donde Vanna es dDelta/dIV)
+    - Net Drift = Acumulado de compras/ventas de primas de Calls menos Puts ponderado por volumen intradía.
+
+    REGLAS DE RESPUESTA Y FORMATO:
+    - Si la consulta es técnica o de mercado, integra los datos del terminal con tu conocimiento cuantitativo.
+    - NUNCA uses notación LaTeX ni símbolos de dólar seguidos en fórmulas (evita $, $$, \(, \)). Escribe 'USD' o 'dólares'.
+    - Sé claro, conciso, estructurado con viñetas o negritas, y adapta tu tono según si la interacción es informal ("Hola") o analítica.
     """
 
     prompt_final = mensaje_usuario or f"Proporciona un diagnóstico estratégico del mercado integrando los niveles GEX, Charm/Vanna Exposure y el Net Drift intradía para {tipo_analisis}."
@@ -1252,7 +1286,7 @@ def consultar_ia_cache(
         except Exception as e_gemini:
             log_to_console("Gemini AI Engine", str(e_gemini))
 
-    return "Ocurrió un error al procesar la solicitud de IA."
+    return "Hola, soy tu asistente de IA. En este momento estoy listo para responder tus preguntas o analizar los datos del mercado."
 
 def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
     net_dex_val = float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0
@@ -1267,7 +1301,8 @@ def consultar_ia(tipo_analisis=None, mensaje_usuario=None):
             snaps_hist = fetch_supabase_gex_history(ticker_symbol, limit=20)
             if snaps_hist:
                 for s in snaps_hist[-5:]:
-                    history_lines.append(f"- [{s.get('created_at', '')[:16]}] Spot: {s.get('spot')} USD | Net GEX: {fmt_val(s.get('net_gex', 0)).replace('$', '')} USD")
+                    time_label = str(s.get('time', s.get('created_at', '')))[:16]
+                    history_lines.append(f"- [{time_label}] Spot: {s.get('spot')} USD | Net GEX: {fmt_val(s.get('net_gex', 0)).replace('$', '')} USD")
         except Exception:
             pass
     
@@ -1908,40 +1943,63 @@ with tab_greeks:
                     template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
                     title="<b>Vanna Exposure (Sensibilidad de Delta respecto al cambio en IV)</b>",
                     xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs_grk),
-                    yaxis=dict(title="Net Vanna ($M)", gridcolor="rgba(255,255,255,0.05)"),
+                    yaxis=dict(title="Vanna ($M)", gridcolor="rgba(255,255,255,0.05)"),
                     height=480, margin=dict(l=50, r=40, t=50, b=40)
                 )
                 st.plotly_chart(fig_vanna, use_container_width=True)
-
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 5. BACKGAMMA ---
 with tab_back:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📜 HISTORIAL BACKGAMMA</h3>", unsafe_allow_html=True)
-    st.info("Visualización e historial de sesiones anteriores registradas en Supabase / JSONBin.")
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📜 HISTORIAL DE DÍAS PASADOS (BACKGAMMA)</h3>", unsafe_allow_html=True)
     
-    if supabase:
-        try:
-            snaps_hist = fetch_supabase_gex_history(ticker_symbol, limit=100)
-            if snaps_hist:
-                df_hist_show = pd.DataFrame(snaps_hist)
-                st.dataframe(df_hist_show[['created_at', 'symbol', 'spot', 'net_gex']], use_container_width=True)
-            else:
-                st.write("No hay registros almacenados en el historial de Supabase.")
-        except Exception as e:
-            st.error(f"Error consultando historial: {e}")
-    else:
-        st.warning("Supabase no está conectado.")
+    if jsonbin_history_data:
+        avail_dates = sorted(list(jsonbin_history_data.keys()), reverse=True)
+        sel_date = st.selectbox("Seleccionar Fecha de Historial:", avail_dates)
         
+        if sel_date and sel_date in jsonbin_history_data:
+            day_snaps = jsonbin_history_data[sel_date]
+            if day_snaps:
+                st.info(f"Mostrando {len(day_snaps)} registros guardados para {sel_date}.")
+                
+                b_times = [s.get("time") for s in day_snaps]
+                b_spots = [s.get("spot", 0.0) for s in day_snaps]
+                b_gex = [s.get("net_gex", 0.0) for s in day_snaps]
+                
+                fig_back = make_subplots(specs=[[{"secondary_y": True}]])
+                fig_back.add_trace(go.Scatter(x=b_times, y=b_gex, name="Net GEX Histórico", line=dict(color='#F59E0B', width=2)), secondary_y=False)
+                fig_back.add_trace(go.Scatter(x=b_times, y=b_spots, name=f"Spot Price {ticker_symbol}", line=dict(color='#3B82F6', width=2)), secondary_y=True)
+                
+                fig_back.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title=f"<b>Evolución Intradía Histórica - {sel_date}</b>",
+                    height=450, margin=dict(l=50, r=50, t=40, b=40)
+                )
+                st.plotly_chart(fig_back, use_container_width=True)
+    else:
+        st.warning("No hay datos históricos disponibles en la base de datos secundaria.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 6. DATA ---
+# --- 6. DATA TABLE ---
 with tab_data:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📁 DATOS DE CONTRATOS Y OPCIONES</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📋 TABLA DETALLADA DE OPCIONES Y GRECAS</h3>", unsafe_allow_html=True)
     if not df_curr.empty:
-        st.dataframe(df_curr, use_container_width=True)
+        cols_to_show = [c for c in ['strike', 'openInterest_c', 'openInterest_p', 'net_gex', 'call_gex', 'put_gex', 'net_dex', 'net_tex', 'net_vex', 'net_chex', 'net_vanna', 'iv_c', 'iv_p'] if c in df_curr.columns]
+        st.dataframe(df_curr[cols_to_show].style.format({
+            'strike': '${:.2f}',
+            'net_gex': '${:,.0f}',
+            'call_gex': '${:,.0f}',
+            'put_gex': '${:,.0f}',
+            'net_dex': '${:,.2f}M',
+            'net_tex': '${:,.0f}',
+            'net_vex': '${:,.0f}',
+            'net_chex': '${:,.2f}M',
+            'net_vanna': '${:,.2f}M',
+            'iv_c': '{:.2%}',
+            'iv_p': '{:.2%}'
+        }), use_container_width=True, height=500)
     else:
-        st.info("No hay datos de opciones disponibles.")
+        st.info("No hay datos de opciones cargados en la tabla.")
     st.markdown('</div>', unsafe_allow_html=True)
