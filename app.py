@@ -1289,7 +1289,11 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
        **1. Estado Actual y Régimen del Mercado**
        **2. Puntos Clave de Inflexión y Niveles Operativos**
        **3. Análisis de Flujo y Griegas (DEX, VEX, CHEX, VANNA, Net Drift)**
-       **4. Escenario Más Probable y Proyección Estratégica** (indica si se prevé rango o expansión, zonas de rebote, pivote en Zero Gamma e invalidación).
+       **4. Escenario Más Probable y Proyección Estratégica**:
+       Debes presentar obligatoriamente como mínimo 3 escenarios condicionales detallados basados en los niveles (Call Walls, Put Walls y Zero Gamma): 
+       - Escenario A (Continuación/Retesteo Aceptado): Si rompemos y aceptamos el retesteo en el nivel X, lo más probable es continuar hasta Y.
+       - Escenario B (Rechazo en Resistencia/Soporte): Si rechazamos el nivel X, lo más probable es buscar el nivel Y.
+       - Escenario C (Trampa/Falsa Ruptura): Si rompemos el nivel X pero perdemos la estructura inmediatamente, lo más probable es un movimiento de reversión hacia Y.
     3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$). Usa fuentes y letras normales.
     """
 
@@ -1357,13 +1361,13 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
             )
             save_chat_message("assistant", res)
 
-    if col_btn3.button("🧠 Análisis", key="btn_ai_analisis", use_container_width=True):
-        with st.spinner("Procesando análisis completo..."):
-            res = consultar_ia(
-                tipo_analisis="Análisis Estratégico",
-                mensaje_usuario="Proporciona el Diagnóstico Estratégico y Probabilidades de Mercado completo indicando la proyección más probable."
-            )
-            save_chat_message("assistant", res)
+if col_btn3.button("🧠 Análisis", key="btn_ai_analisis", use_container_width=True):
+    with st.spinner("Procesando análisis completo..."):
+        res = consultar_ia(
+            tipo_analisis="Análisis Estratégico",
+            mensaje_usuario="Proporciona el Diagnóstico Estratégico detallando obligatoriamente al menos 3 escenarios distintos (ruptura con retesteo exitoso, rechazo directo en nivel clave, y trampa/falsa ruptura con reversión)."
+        )
+        save_chat_message("assistant", res)
 
     st.markdown("---")
 
