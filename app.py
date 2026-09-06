@@ -328,7 +328,6 @@ def login_user(username_in, password_in):
             st.session_state.user_email = user_clean
             return True, "Inicio de sesión exitoso."
 
-    # Login por defecto para demostración / desarrollo si no hay secrets
     if not valid_users and user_clean in ["admin", "trader"] and pass_clean in ["admin123", "gex2026"]:
         st.session_state.authenticated = True
         st.session_state.user_email = user_clean
@@ -601,7 +600,7 @@ ref_today = now_tz.floor('D').tz_localize(None)
 hist_raw = fetch_history_schwab(ticker_symbol)
 chain_raw = fetch_option_chain_schwab(ticker_symbol, strike_range)
 
-# Extracción ultra-segura de spot_price
+# Extracción inicial de spot_price
 spot_price = 0.0
 if isinstance(chain_raw, dict):
     raw_spot = chain_raw.get("underlyingPrice")
@@ -720,10 +719,103 @@ if not is_online:
                         if col not in df_curr.columns: df_curr[col] = 0.0
                     exp_0dte = latest_date_key
 
-# --- GENERADOR DE RESPALDO SINTÉTICO SI NO HAY DATOS DE Schwab O JSONBIN ---
 if spot_price <= 0:
     spot_price = TICKER_DEFAULTS.get(ticker_symbol, 480.00)
 
+# --- ZONA HORARIA Y GENERACIÓN/FILTRADO INTRADÍA CORDENADO ---
+h_1m = fetch_history_schwab(ticker_symbol)
+
+today_date_str = now_tz.strftime('%Y-%m-%d')
+if "UTC-5" in tz_choice:
+    start_str = f"{today_date_str} 08:30:00"
+    end_str = f"{today_date_str} 15:00:00"
+else:
+    start_str = f"{today_date_str} 09:30:00"
+    end_str = f"{today_date_str} 16:00:00"
+
+start_time = pd.Timestamp(start_str).tz_localize(tz_target)
+end_time = pd.Timestamp(end_str).tz_localize(tz_target)
+
+full_time_grid = pd.date_range(start_time, end_time, freq="1min")
+full_timestamps = full_time_grid.strftime('%H:%M').tolist()
+
+min_strike = int(np.floor(spot_price - strike_range)) if spot_price > 0 else 0
+max_strike = int(np.ceil(spot_price + strike_range)) if spot_price > 0 else 100
+fine_strikes = np.linspace(min_strike, max_strike, int((max_strike - min_strike) * 2 + 1))
+
+if not h_1m.empty and is_online:
+    h_1m = h_1m.tz_convert(tz_target)
+    h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
+    if h_1m_today.empty:
+        today_date_str = h_1m.index.max().strftime('%Y-%m-%d')
+        h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
+
+    h_1m_today = h_1m_today[~h_1m_today.index.duplicated(keep='last')]
+    h_1m_reindexed = h_1m_today.reindex(full_time_grid)
+    spot_series = h_1m_reindexed['Close'].ffill().bfill()
+    full_spots = spot_series.fillna(spot_price).tolist()
+    
+    # SINCRONIZACIÓN CORREGIDA: Sincronizar el spot_price con la última vela real
+    if full_spots and full_spots[-1] > 0:
+        spot_price = float(full_spots[-1])
+
+elif is_cloud_backup and jsonbin_history_data:
+    available_cloud_dates = sorted(list(jsonbin_history_data.keys()))
+    latest_date_key = available_cloud_dates[-1]
+    latest_day_snaps = jsonbin_history_data.get(latest_date_key, [])
+    
+    if latest_day_snaps:
+        full_timestamps = [s.get("time") for s in latest_day_snaps]
+        full_spots = [s.get("spot", spot_price) for s in latest_day_snaps]
+        if full_spots and full_spots[-1] > 0:
+            spot_price = float(full_spots[-1])
+        
+        cloud_strikes_set = set()
+        for s in latest_day_snaps:
+            for st_item in s.get("strikes", []):
+                cloud_strikes_set.add(st_item["strike"])
+        if cloud_strikes_set:
+            fine_strikes = np.array(sorted(list(cloud_strikes_set)))
+            
+        Z_matrix_real = np.zeros((len(fine_strikes), len(latest_day_snaps)))
+        strike_idx_map = {k: i for i, k in enumerate(fine_strikes)}
+        for t_idx, s in enumerate(latest_day_snaps):
+            for st_item in s.get("strikes", []):
+                st_v = st_item["strike"]
+                if st_v in strike_idx_map:
+                    Z_matrix_real[strike_idx_map[st_v], t_idx] = st_item.get("net_gex", 0.0)
+        
+        h_1m_reindexed = pd.DataFrame({
+            'Open': full_spots, 'High': [v + 0.3 for v in full_spots],
+            'Low': [v - 0.3 for v in full_spots], 'Close': full_spots,
+            'Volume': [1500 for _ in full_spots]
+        }, index=full_time_grid[:len(full_spots)])
+    else:
+        full_spots = []
+else:
+    # --- GENERADOR INTRADÍA SINTÉTICO (SINCRONIZADO) ---
+    np.random.seed(42)
+    n_mins = len(full_timestamps)
+    price_changes = np.random.normal(0, 0.15, n_mins)
+    cum_drift = np.cumsum(price_changes)
+    cum_drift = cum_drift - cum_drift[-1]  # Asegura que el punto final sea exactamente spot_price
+    full_spots = (spot_price + cum_drift).tolist()
+    
+    syn_opens = full_spots.copy()
+    syn_highs = [p + abs(np.random.normal(0.15, 0.05)) for p in full_spots]
+    syn_lows = [p - abs(np.random.normal(0.15, 0.05)) for p in full_spots]
+    syn_closes = full_spots.copy()
+    syn_vols = np.random.randint(500, 5000, n_mins)
+
+    h_1m_reindexed = pd.DataFrame({
+        'Open': syn_opens,
+        'High': syn_highs,
+        'Low': syn_lows,
+        'Close': syn_closes,
+        'Volume': syn_vols
+    }, index=full_time_grid)
+
+# --- GENERADOR DE RESPALDO SINTÉTICO SI NO HAY CADENA DE OPCIONES ---
 if df_curr.empty:
     np.random.seed(42)
     s_min = int(np.floor(spot_price - strike_range))
@@ -957,91 +1049,6 @@ else:
     condition_str = "Neutral"
     iv_str = "20.00%"
     iv_rank_str = "N/A"
-
-# --- ZONA HORARIA Y GENERACIÓN/FILTRADO INTRADÍA CORDENADO ---
-h_1m = fetch_history_schwab(ticker_symbol)
-
-today_date_str = now_tz.strftime('%Y-%m-%d')
-if "UTC-5" in tz_choice:
-    start_str = f"{today_date_str} 08:30:00"
-    end_str = f"{today_date_str} 15:00:00"
-else:
-    start_str = f"{today_date_str} 09:30:00"
-    end_str = f"{today_date_str} 16:00:00"
-
-start_time = pd.Timestamp(start_str).tz_localize(tz_target)
-end_time = pd.Timestamp(end_str).tz_localize(tz_target)
-
-full_time_grid = pd.date_range(start_time, end_time, freq="1min")
-full_timestamps = full_time_grid.strftime('%H:%M').tolist()
-
-min_strike = int(np.floor(spot_price - strike_range)) if spot_price > 0 else 0
-max_strike = int(np.ceil(spot_price + strike_range)) if spot_price > 0 else 100
-fine_strikes = np.linspace(min_strike, max_strike, int((max_strike - min_strike) * 2 + 1))
-
-if not h_1m.empty and is_online:
-    h_1m = h_1m.tz_convert(tz_target)
-    h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
-    if h_1m_today.empty:
-        today_date_str = h_1m.index.max().strftime('%Y-%m-%d')
-        h_1m_today = h_1m[h_1m.index.strftime('%Y-%m-%d') == today_date_str].copy()
-
-    h_1m_today = h_1m_today[~h_1m_today.index.duplicated(keep='last')]
-    h_1m_reindexed = h_1m_today.reindex(full_time_grid)
-    spot_series = h_1m_reindexed['Close'].ffill().bfill()
-    full_spots = spot_series.fillna(spot_price).tolist()
-
-elif is_cloud_backup and jsonbin_history_data:
-    available_cloud_dates = sorted(list(jsonbin_history_data.keys()))
-    latest_date_key = available_cloud_dates[-1]
-    latest_day_snaps = jsonbin_history_data.get(latest_date_key, [])
-    
-    if latest_day_snaps:
-        full_timestamps = [s.get("time") for s in latest_day_snaps]
-        full_spots = [s.get("spot", spot_price) for s in latest_day_snaps]
-        
-        cloud_strikes_set = set()
-        for s in latest_day_snaps:
-            for st_item in s.get("strikes", []):
-                cloud_strikes_set.add(st_item["strike"])
-        if cloud_strikes_set:
-            fine_strikes = np.array(sorted(list(cloud_strikes_set)))
-            
-        Z_matrix_real = np.zeros((len(fine_strikes), len(latest_day_snaps)))
-        strike_idx_map = {k: i for i, k in enumerate(fine_strikes)}
-        for t_idx, s in enumerate(latest_day_snaps):
-            for st_item in s.get("strikes", []):
-                st_v = st_item["strike"]
-                if st_v in strike_idx_map:
-                    Z_matrix_real[strike_idx_map[st_v], t_idx] = st_item.get("net_gex", 0.0)
-        
-        h_1m_reindexed = pd.DataFrame({
-            'Open': full_spots, 'High': [v + 0.3 for v in full_spots],
-            'Low': [v - 0.3 for v in full_spots], 'Close': full_spots,
-            'Volume': [1500 for _ in full_spots]
-        }, index=full_time_grid[:len(full_spots)])
-    else:
-        full_spots = []
-else:
-    # --- GENERADOR INTRADÍA SINTÉTICO (GARANTIZA NUNCA QUEDAR VACÍO) ---
-    np.random.seed(42)
-    n_mins = len(full_timestamps)
-    price_changes = np.random.normal(0, 0.25, n_mins)
-    full_spots = (spot_price + np.cumsum(price_changes)).tolist()
-    
-    syn_opens = full_spots.copy()
-    syn_highs = [p + abs(np.random.normal(0.2, 0.1)) for p in full_spots]
-    syn_lows = [p - abs(np.random.normal(0.2, 0.1)) for p in full_spots]
-    syn_closes = [p + np.random.normal(0, 0.1) for p in full_spots]
-    syn_vols = np.random.randint(500, 5000, n_mins)
-
-    h_1m_reindexed = pd.DataFrame({
-        'Open': syn_opens,
-        'High': syn_highs,
-        'Low': syn_lows,
-        'Close': syn_closes,
-        'Volume': syn_vols
-    }, index=full_time_grid)
 
 # --- MATRIZ DE HEATMAP REAL/SIMULADA ---
 if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
