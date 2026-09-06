@@ -150,6 +150,7 @@ st.markdown("""
         font-style: normal !important;
     }
     
+    /* Forzar deshabilitado de cursivas en math/LaTeX de Streamlit */
     .katex, .katex-display, .math, em, i {
         font-style: normal !important;
         font-family: 'Plus Jakarta Sans', sans-serif !important;
@@ -318,6 +319,7 @@ st.markdown("""
         gap: 6px;
     }
 
+    /* --- TABLAS RESUMEN Y NIVELES --- */
     .summary-table {
         width: 100%;
         border-collapse: separate;
@@ -526,11 +528,21 @@ if "chat_messages" not in st.session_state:
             pass
 
 def clean_ai_response(text: str) -> str:
+    """
+    Elimina estrictamente el formato LaTeX y las cursivas/itálicas para evitar
+    que la tipografía se vea inclinada, ilegible o con fuentes extrañas.
+    """
     if not text:
         return ""
     
+    # 1. Eliminar símbolos de dólar que fuerzan LaTeX en Streamlit
     cleaned = text.replace("$", "")
+    
+    # 2. Eliminar delimitadores de fórmulas matemáticas LaTeX
     cleaned = cleaned.replace(r"\(", "").replace(r"\)", "").replace(r"\[", "").replace(r"\]", "")
+    
+    # 3. Eliminar asteriscos o guiones bajos de itálicas sueltos (*texto* o _texto_)
+    # conservando la negrita (**texto**)
     cleaned = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'\1', cleaned)
     cleaned = re.sub(r'(?<!_)_(?!_)(.*?)(?<!_)_(?!_)', r'\1', cleaned)
     
@@ -1335,50 +1347,52 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
         f"El comportamiento dominante será la reversión a la media con compresión de primas, ideal para buscar rotaciones en los extremos y aprovechar el decaimiento por Theta y Charm."
     )
 
-    html_out = f"""<div class="ai-card">
-<div class="ai-header">
-<div class="ai-title">🧠 DIAGNÓSTICO ESTRATÉGICO Y NIVELES CONDICIONALES DE MERCADO ({ticker})</div>
-<div class="ai-tag">{regime_tag}</div>
-</div>
+    html_out = f"""
+    <div class="ai-card">
+        <div class="ai-header">
+            <div class="ai-title">🧠 DIAGNÓSTICO ESTRATÉGICO Y NIVELES CONDICIONALES DE MERCADO ({ticker})</div>
+            <div class="ai-tag">{regime_tag}</div>
+        </div>
 
-<div class="ai-sec-title">📌 1. ESTADO GENERAL Y RÉGIMEN DE MERCADO</div>
-<p style="margin: 0 0 12px 0; font-size:0.88rem; line-height:1.6;">
-El precio actual cotiza en <b>{spot:.2f} USD</b> con una Volatilidad Implícita (IV) ATM en <b>{iv_txt}</b> ({iv_rank}). 
-El Net GEX total se sitúa en <b>{net_gex_str} USD</b>. {condition}.
-El acumulado de primas intradía (Net Premium Drift) registra <b>{drift_str} USD</b>.
-</p>
+        <div class="ai-sec-title">📌 1. ESTADO GENERAL Y RÉGIMEN DE MERCADO</div>
+        <p style="margin: 0 0 12px 0; font-size:0.88rem; line-height:1.6;">
+            El precio actual cotiza en <b>{spot:.2f} USD</b> con una Volatilidad Implícita (IV) ATM en <b>{iv_txt}</b> ({iv_rank}). 
+            El Net GEX total se sitúa en <b>{net_gex_str} USD</b>. {condition}.
+            El acumulado de primas intradía (Net Premium Drift) registra <b>{drift_str} USD</b>.
+        </p>
 
-<div class="ai-sec-title">🎯 2. ARQUITECTURA DE NIVELES Y ZONAS CLAVE</div>
-<ul style="margin: 0 0 12px 20px; font-size:0.88rem; line-height:1.6;">
-<li><b>Zero Gamma Level (Pivote de Flip)</b>: <b>{zg_v:.2f} USD</b> ({dist_zg:+.2f}% de distancia). Marca la frontera entre la compresión de volatilidad y la expansión acelerada.</li>
-<li><b>Resistencias (Call Walls)</b>: CW1 = <b>{cw1_v:.0f} USD</b> (+{dist_cw1:.2f}%), CW2 = <b>{cw2_v:.0f} USD</b>, CW3 = <b>{cw3_v:.0f} USD</b>.</li>
-<li><b>Soportes (Put Walls)</b>: PW1 = <b>{pw1_v:.0f} USD</b> (-{dist_pw1:.2f}%), PW2 = <b>{pw2_v:.0f} USD</b>, PW3 = <b>{pw3_v:.0f} USD</b>.</li>
-</ul>
+        <div class="ai-sec-title">🎯 2. ARQUITECTURA DE NIVELES Y ZONAS CLAVE</div>
+        <ul style="margin: 0 0 12px 20px; font-size:0.88rem; line-height:1.6;">
+            <li><b>Zero Gamma Level (Pivote de Flip)</b>: <b>{zg_v:.2f} USD</b> ({dist_zg:+.2f}% de distancia). Marca la frontera entre la compresión de volatilidad y la expansión acelerada.</li>
+            <li><b>Resistencias (Call Walls)</b>: CW1 = <b>{cw1_v:.0f} USD</b> (+{dist_cw1:.2f}%), CW2 = <b>{cw2_v:.0f} USD</b>, CW3 = <b>{cw3_v:.0f} USD</b>.</li>
+            <li><b>Soportes (Put Walls)</b>: PW1 = <b>{pw1_v:.0f} USD</b> (-{dist_pw1:.2f}%), PW2 = <b>{pw2_v:.0f} USD</b>, PW3 = <b>{pw3_v:.0f} USD</b>.</li>
+        </ul>
 
-<div class="ai-sec-title">📊 3. DIAGNÓSTICO DE SENTIMIENTO Y FLUJO DE OPCIONES</div>
-<ul style="margin: 0 0 12px 20px; font-size:0.88rem; line-height:1.6;">
-<li><b>Delta Exposure (DEX)</b>: <b>{dex_v:.2f}M USD</b>. Refleja la exposición direccional neta del mercado.</li>
-<li><b>Charm Exposure (CHEX)</b>: <b>{chex_v:.2f}M USD/día</b>. Mide la pérdida diaria de Delta por el paso del tiempo.</li>
-<li><b>Vanna Exposure (VANNA)</b>: <b>{vanna_v:.2f}M USD</b>. Indica el rebalanceo de Delta ante variaciones de Volatilidad Implícita.</li>
-</ul>
+        <div class="ai-sec-title">📊 3. DIAGNÓSTICO DE SENTIMIENTO Y FLUJO DE OPCIONES</div>
+        <ul style="margin: 0 0 12px 20px; font-size:0.88rem; line-height:1.6;">
+            <li><b>Delta Exposure (DEX)</b>: <b>{dex_v:.2f}M USD</b>. Refleja la exposición direccional neta del mercado.</li>
+            <li><b>Charm Exposure (CHEX)</b>: <b>{chex_v:.2f}M USD/día</b>. Mide la pérdida diaria de Delta por el paso del tiempo.</li>
+            <li><b>Vanna Exposure (VANNA)</b>: <b>{vanna_v:.2f}M USD</b>. Indica el rebalanceo de Delta ante variaciones de Volatilidad Implícita.</li>
+        </ul>
 
-<div class="ai-sec-title">🛣️ 4. HOJA DE RUTA Y PLAN TÁCTICO CONDICIONAL INTRADÍA</div>
+        <div class="ai-sec-title">🛣️ 4. HOJA DE RUTA Y PLAN TÁCTICO CONDICIONAL INTRADÍA</div>
+        
+        <div class="ai-box-bull">
+            <b>🟢 ESCENARIO ALCISTA (RUPTURA O RECHAZO EN SOTERRAMIENTO)</b><br>
+            {escenario_alcista}
+        </div>
 
-<div class="ai-box-bull">
-<b>🟢 ESCENARIO ALCISTA (RUPTURA O RECHAZO EN SOTERRAMIENTO)</b><br>
-{escenario_alcista}
-</div>
+        <div class="ai-box-bear">
+            <b>🔴 ESCENARIO BAJISTA (PERFORACIÓN DE PW1 Y ZERO GAMMA)</b><br>
+            {escenario_bajista}
+        </div>
 
-<div class="ai-box-bear">
-<b>🔴 ESCENARIO BAJISTA (PERFORACIÓN DE PW1 Y ZERO GAMMA)</b><br>
-{escenario_bajista}
-</div>
-
-<div class="ai-box-range">
-<b>🟡 ESCENARIO DE COMPRESIÓN (REVERSIÓN EN RANGO)</b><br>
-{escenario_rango}
-</div>
-</div>"""
+        <div class="ai-box-range">
+            <b>🟡 ESCENARIO DE COMPRESIÓN (REVERSIÓN EN RANGO)</b><br>
+            {escenario_rango}
+        </div>
+    </div>
+    """
     return html_out
 
 def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
@@ -1493,7 +1507,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
 
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
-            if msg["role"] == "assistant" and ("<div" in msg["content"] or msg["content"].strip().startswith("<")):
+            if msg["role"] == "assistant" and msg["content"].startswith("<div class="):
                 st.markdown(msg["content"], unsafe_allow_html=True)
             else:
                 st.write(msg["content"])
@@ -1507,7 +1521,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
             respuesta_bot = consultar_ia(mensaje_usuario=chat_input)
             save_chat_message("assistant", respuesta_bot)
             with st.chat_message("assistant"):
-                if "<div" in respuesta_bot or respuesta_bot.strip().startswith("<"):
+                if respuesta_bot.startswith("<div class="):
                     st.markdown(respuesta_bot, unsafe_allow_html=True)
                 else:
                     st.write(respuesta_bot)
@@ -1793,31 +1807,233 @@ with tab_drift:
 # --- 4. GREEKS (GRIEGAS) ---
 with tab_greeks:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📊 Exposición de Griegas y Perfil de Riesgo</h3>", unsafe_allow_html=True)
-    if not df_curr.empty:
-        greeks_cols = [c for c in ['strike', 'net_dex', 'net_tex', 'net_vex', 'net_chex', 'net_vanna'] if c in df_curr.columns]
-        st.dataframe(df_curr[greeks_cols], use_container_width=True)
-    else:
-        st.info("No hay datos de griegas disponibles.")
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📊 PERFILES DE EXPOSICIÓN DE GRIEGAS</h3>", unsafe_allow_html=True)
+
+    c_dex = "#10B981" if net_dex_total >= 0 else "#EF4444"
+    c_tex = "#10B981" if net_tex_total >= 0 else "#EF4444"
+    c_vex = "#10B981" if net_vex_total >= 0 else "#EF4444"
+    c_chex = "#10B981" if net_chex_total >= 0 else "#EF4444"
+    c_vanna = "#10B981" if net_vanna_total >= 0 else "#EF4444"
+
+    g1, g2, g3, g4, g5 = st.columns(5)
+    g1.markdown(f'<div class="metric-card"><div class="metric-label">Net Delta (DEX)</div><div class="metric-value" style="color:{c_dex};">USD {net_dex_total:.2f}M</div><div class="metric-sub">Delta Exposure</div></div>', unsafe_allow_html=True)
+    g2.markdown(f'<div class="metric-card"><div class="metric-label">Net Theta (TEX)</div><div class="metric-value" style="color:{c_tex};">USD {net_tex_total:,.0f}</div><div class="metric-sub">Decaimiento / Día</div></div>', unsafe_allow_html=True)
+    g3.markdown(f'<div class="metric-card"><div class="metric-label">Net Vega (VEX)</div><div class="metric-value" style="color:{c_vex};">USD {net_vex_total:,.0f}</div><div class="metric-sub">Por +1% IV</div></div>', unsafe_allow_html=True)
+    g4.markdown(f'<div class="metric-card"><div class="metric-label">Net Charm (CHEX)</div><div class="metric-value" style="color:{c_chex};">USD {net_chex_total:.2f}M</div><div class="metric-sub">Decaimiento Delta / Día</div></div>', unsafe_allow_html=True)
+    g5.markdown(f'<div class="metric-card"><div class="metric-label">Net Vanna (VANNA)</div><div class="metric-value" style="color:{c_vanna};">USD {net_vanna_total:.2f}M</div><div class="metric-sub">Sensibilidad a Vol</div></div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
+
+    sub_grk1, sub_grk2, sub_grk3, sub_grk4, sub_grk5 = st.tabs([
+        "DELTA (DEX)", "THETA (TEX)", "VEGA (VEX)", "CHARM (CHEX)", "VANNA (VANNA EX)"
+    ])
+
+    if not df_curr.empty and 'strike' in df_curr.columns:
+        df_grk_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+        xaxis_kwargs_grk = safe_strike_range(df_grk_sub)
+
+        # 1. DELTA (DEX)
+        with sub_grk1:
+            if not df_grk_sub.empty and 'net_dex' in df_grk_sub.columns:
+                fig_net_dex = go.Figure()
+                colors_net_dex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_dex']]
+                fig_net_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_dex'], marker_color=colors_net_dex, name="Net DEX"))
+                if spot_price > 0: fig_net_dex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (USD {spot_price:.2f})")
+                fig_net_dex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Delta Exposure (DEX) Profile por Strike (M USD)</b>", xaxis=dict(title="Strike (USD)", **xaxis_kwargs_grk), height=400)
+                st.plotly_chart(fig_net_dex, use_container_width=True)
+
+        # 2. THETA (TEX)
+        with sub_grk2:
+            if not df_grk_sub.empty and 'net_tex' in df_grk_sub.columns:
+                fig_net_tex = go.Figure()
+                colors_net_tex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_tex']]
+                fig_net_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_tex'], marker_color=colors_net_tex, name="Net TEX"))
+                if spot_price > 0: fig_net_tex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (USD {spot_price:.2f})")
+                fig_net_tex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Theta Exposure (TEX) Profile por Strike (USD/Día)</b>", xaxis=dict(title="Strike (USD)", **xaxis_kwargs_grk), height=400)
+                st.plotly_chart(fig_net_tex, use_container_width=True)
+
+        # 3. VEGA (VEX)
+        with sub_grk3:
+            if not df_grk_sub.empty and 'net_vex' in df_grk_sub.columns:
+                fig_net_vex = go.Figure()
+                colors_net_vex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vex']]
+                fig_net_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_vex'], marker_color=colors_net_vex, name="Net VEX"))
+                if spot_price > 0: fig_net_vex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (USD {spot_price:.2f})")
+                fig_net_vex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Vega Exposure (VEX) Profile por Strike (USD/+1% IV)</b>", xaxis=dict(title="Strike (USD)", **xaxis_kwargs_grk), height=400)
+                st.plotly_chart(fig_net_vex, use_container_width=True)
+
+        # 4. CHARM (CHEX)
+        with sub_grk4:
+            if not df_grk_sub.empty and 'net_chex' in df_grk_sub.columns:
+                fig_net_chex = go.Figure()
+                colors_net_chex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_chex']]
+                fig_net_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_chex'], marker_color=colors_net_chex, name="Net CHEX"))
+                if spot_price > 0: fig_net_chex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (USD {spot_price:.2f})")
+                fig_net_chex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Charm Exposure (CHEX) Profile por Strike (M USD/Día)</b>", xaxis=dict(title="Strike (USD)", **xaxis_kwargs_grk), height=400)
+                st.plotly_chart(fig_net_chex, use_container_width=True)
+
+        # 5. VANNA
+        with sub_grk5:
+            if not df_grk_sub.empty and 'net_vanna' in df_grk_sub.columns:
+                fig_net_vanna = go.Figure()
+                colors_net_vanna = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vanna']]
+                fig_net_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_vanna'], marker_color=colors_net_vanna, name="Net VANNA"))
+                if spot_price > 0: fig_net_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (USD {spot_price:.2f})")
+                fig_net_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Vanna Exposure Profile por Strike (M USD)</b>", xaxis=dict(title="Strike (USD)", **xaxis_kwargs_grk), height=400)
+                st.plotly_chart(fig_net_vanna, use_container_width=True)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 5. BACKGAMMA ---
 with tab_back:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📜 Registro Histórico BackGamma</h3>", unsafe_allow_html=True)
-    supabase_hist_data = fetch_supabase_gex_history(ticker_symbol, limit=50)
-    if supabase_hist_data:
-        st.dataframe(pd.DataFrame(supabase_hist_data), use_container_width=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📜 HISTÓRICO Y BACKGAMMA DE REGISTROS</h3>", unsafe_allow_html=True)
+    
+    supabase_hist_records = fetch_supabase_gex_history(ticker_symbol, limit=200)
+    if supabase_hist_records:
+        df_hist_gex = pd.DataFrame(supabase_hist_records)
+        if 'spot' in df_hist_gex.columns and 'net_gex' in df_hist_gex.columns:
+            df_hist_gex['time_lbl'] = pd.to_datetime(df_hist_gex.get('created_at', df_hist_gex.get('time'))).dt.strftime('%H:%M')
+            
+            fig_back = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_back.add_trace(go.Scatter(x=df_hist_gex['time_lbl'], y=df_hist_gex['spot'], name="Spot Price", line=dict(color="#3B82F6", width=2)), secondary_y=False)
+            fig_back.add_trace(go.Bar(x=df_hist_gex['time_lbl'], y=df_hist_gex['net_gex'], name="Net GEX", marker_color=['#10B981' if v>=0 else '#EF4444' for v in df_hist_gex['net_gex']], opacity=0.5), secondary_y=True)
+            
+            fig_back.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', height=500, title="Evolución Intradía de Spot vs Net GEX (Supabase Cloud History)")
+            st.plotly_chart(fig_back, use_container_width=True)
     else:
-        st.info("Sin registros históricos guardados.")
+        st.info("Aún no hay suficientes registros históricos almacenados para el ticker seleccionado.")
+        
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 6. DATA ---
+# --- 6. DATA (SUBDIVIDIDO EN DATA SUMMARY Y DATA GRID) ---
 with tab_data:
-    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>💾 Tabla de Datos y Cadena de Opciones</h3>", unsafe_allow_html=True)
-    if not df_curr.empty:
-        st.dataframe(df_curr, use_container_width=True)
-    else:
-        st.info("No hay datos disponibles en la cadena de opciones.")
-    st.markdown('</div>', unsafe_allow_html=True)
+    sub_data1, sub_data2 = st.tabs(["📊 DATA SUMMARY", "📋 DATA GRID"])
+
+    # --- SUBDIVISIÓN 1: DATA SUMMARY ---
+    with sub_data1:
+        st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
+        
+        # TABLA 1: NIVELES DEL DÍA Y NIVELES GEX
+        st.markdown("<h4 style='font-family:\"JetBrains Mono\"; font-size:0.95rem; font-weight:800; color:#60A5FA; margin-bottom:12px;'>📌 RESUMEN DE NIVELES DEL DÍA Y ZONAS GEX</h4>", unsafe_allow_html=True)
+        
+        open_val = h_1m_reindexed['Open'].iloc[0] if not h_1m_reindexed.empty and 'Open' in h_1m_reindexed.columns else spot_price
+        high_val = h_1m_reindexed['High'].max() if not h_1m_reindexed.empty and 'High' in h_1m_reindexed.columns else spot_price + 2.5
+        low_val = h_1m_reindexed['Low'].min() if not h_1m_reindexed.empty and 'Low' in h_1m_reindexed.columns else spot_price - 2.5
+        
+        col_sum1, col_sum2 = st.columns(2)
+        
+        with col_sum1:
+            st.markdown(f"""
+                <table class="summary-table">
+                    <thead>
+                        <tr><th colspan="2">📊 METRICAS DEL DÍA ({ticker_symbol})</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>PRECIO SPOT ACTUAL</td><td><b>USD {spot_price:.2f}</b></td></tr>
+                        <tr><td>APERTURA DE HOY (OPEN)</td><td>USD {open_val:.2f}</td></tr>
+                        <tr><td>MÁXIMO DE HOY (HIGH)</td><td><span style="color:#10B981;">USD {high_val:.2f}</span></td></tr>
+                        <tr><td>MÍNIMO DE HOY (LOW)</td><td><span style="color:#EF4444;">USD {low_val:.2f}</span></td></tr>
+                        <tr><td>NET GEX TOTAL</td><td><b>{fmt_val(net_gex_total)}</b></td></tr>
+                        <tr><td>VOLATILIDAD IMPLÍCITA (IV)</td><td>{iv_str} ({iv_rank_str})</td></tr>
+                        <tr><td>NET PREMIUM DRIFT</td><td>{fmt_val(last_net_drift)}</td></tr>
+                    </tbody>
+                </table>
+            """, unsafe_allow_html=True)
+
+        with col_sum2:
+            st.markdown(f"""
+                <table class="summary-table">
+                    <thead>
+                        <tr><th colspan="2">🎯 ARQUITECTURA DE NIVELES GEX</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>ZERO GAMMA LEVEL (PIVOTE FLIP)</td><td><span style="color:#F59E0B; font-weight:800;">USD {zero_gamma:.2f}</span></td></tr>
+                        <tr><td>CALL WALL 1 (RESISTENCIA 1)</td><td><span style="color:#10B981; font-weight:800;">USD {cw1:.0f}</span></td></tr>
+                        <tr><td>CALL WALL 2 (RESISTENCIA 2)</td><td><span style="color:#10B981;">USD {cw2:.0f}</span></td></tr>
+                        <tr><td>CALL WALL 3 (RESISTENCIA 3)</td><td><span style="color:#10B981;">USD {cw3:.0f}</span></td></tr>
+                        <tr><td>PUT WALL 1 (SOPORTE 1)</td><td><span style="color:#EF4444; font-weight:800;">USD {pw1:.0f}</span></td></tr>
+                        <tr><td>PUT WALL 2 (SOPORTE 2)</td><td><span style="color:#EF4444;">USD {pw2:.0f}</span></td></tr>
+                        <tr><td>PUT WALL 3 (SOPORTE 3)</td><td><span style="color:#EF4444;">USD {pw3:.0f}</span></td></tr>
+                    </tbody>
+                </table>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<hr style='border-color:rgba(255,255,255,0.08); margin: 20px 0;'>", unsafe_allow_html=True)
+        
+        # REPORTE Y DIAGNÓSTICO ESTRATÉGICO CON IA
+        st.markdown("<h4 style='font-family:\"JetBrains Mono\"; font-size:0.95rem; font-weight:800; color:#F0F6FC; margin-bottom:12px;'>🤖 REPORTE Y DIAGNÓSTICO ESTRATÉGICO CON IA</h4>", unsafe_allow_html=True)
+        st.caption("Presiona el botón para generar un informe analítico profundo con la IA integrando escenarios de ruptura y rechazo condicional.")
+
+        if st.button("🚀 GENERAR ANÁLISIS ESTRATÉGICO DE MERCADO CON IA", key="btn_data_summary_ai", use_container_width=True):
+            with st.spinner("Procesando datos cuantitativos y generando informe condicional profundo..."):
+                analisis_resultado = consultar_ia(
+                    tipo_analisis="Resumen Estratégico Data Summary",
+                    mensaje_usuario=(
+                        f"Genera el informe institucional para {ticker_symbol} estructurado estrictamente en 4 secciones: "
+                        "1. ESTADO GENERAL Y RÉGIMEN DE MERCADO, "
+                        "2. ARQUITECTURA DE NIVELES Y ZONAS CLAVE, "
+                        "3. DIAGNÓSTICO DE SENTIMIENTO Y FLUJO DE OPCIONES, "
+                        "4. HOJA DE RUTA Y PLAN TÁCTICO CONDICIONAL INTRADÍA. "
+                        "Detalla escenarios analíticos profundos de 'Si rompemos X iremos a Y, si fallamos en romper X rechazaremos a Z'."
+                    )
+                )
+                st.session_state.summary_ai_analysis = analisis_resultado
+
+        if "summary_ai_analysis" in st.session_state and st.session_state.summary_ai_analysis:
+            res_txt = st.session_state.summary_ai_analysis
+            if res_txt.startswith("<div class="):
+                st.markdown(res_txt, unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="ai-card">{res_txt}</div>', unsafe_allow_html=True)
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- SUBDIVISIÓN 2: DATA GRID ---
+    with sub_data2:
+        st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
+        st.markdown("<h4 style='font-family:\"JetBrains Mono\"; font-size:0.95rem; font-weight:800; color:#60A5FA; margin-bottom:12px;'>📋 CADENA COMPLETA DE OPCIONES Y GRIEGAS</h4>", unsafe_allow_html=True)
+        
+        if not df_curr.empty:
+            df_disp = df_curr.copy()
+            
+            # Renombrar columnas para la tabla de datos
+            rename_dict = {
+                'strike': 'Strike (USD)',
+                'openInterest_c': 'Call OI',
+                'openInterest_p': 'Put OI',
+                'call_gex': 'Call GEX ($)',
+                'put_gex': 'Put GEX ($)',
+                'net_gex': 'Net GEX ($)',
+                'delta_c': 'Call Delta',
+                'delta_p': 'Put Delta',
+                'iv_c': 'Call IV',
+                'iv_p': 'Put IV',
+                'net_dex': 'Net DEX (M$)',
+                'net_chex': 'Net CHEX (M$)'
+            }
+            cols_to_show = [c for c in rename_dict.keys() if c in df_disp.columns]
+            df_table = df_disp[cols_to_show].rename(columns=rename_dict)
+            
+            st.dataframe(
+                df_table.style.format({
+                    'Strike (USD)': '{:.2f}',
+                    'Call OI': '{:,.0f}',
+                    'Put OI': '{:,.0f}',
+                    'Call GEX ($)': '{:,.0f}',
+                    'Put GEX ($)': '{:,.0f}',
+                    'Net GEX ($)': '{:,.0f}',
+                    'Call Delta': '{:.3f}',
+                    'Put Delta': '{:.3f}',
+                    'Call IV': '{:.2%}',
+                    'Put IV': '{:.2%}',
+                    'Net DEX (M$)': '{:.2f}',
+                    'Net CHEX (M$)': '{:.2f}'
+                }),
+                use_container_width=True,
+                height=520
+            )
+        else:
+            st.warning("No hay datos de opciones disponibles actualmente.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
