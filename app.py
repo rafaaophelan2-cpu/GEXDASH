@@ -56,41 +56,6 @@ def get_supabase_client():
 
 supabase: Client = get_supabase_client()
 
-# --- LECTURA DE SNAPSHOTS DESDE SUPABASE ---
-@st.cache_data(ttl=1)
-def fetch_supabase_latest_snapshot(symbol="QQQ"):
-    if not supabase:
-        return None
-    try:
-        res = supabase.table("gex_snapshots") \
-            .select("*") \
-            .eq("symbol", symbol) \
-            .order("created_at", desc=True) \
-            .limit(1) \
-            .execute()
-        if res.data and len(res.data) > 0:
-            return res.data[0]
-    except Exception as e:
-        log_to_console("Supabase Snapshot Fetch Error", str(e))
-    return None
-
-@st.cache_data(ttl=2)
-def fetch_supabase_gex_history(symbol="QQQ", limit=100):
-    if not supabase:
-        return []
-    try:
-        res = supabase.table("gex_snapshots") \
-            .select("*") \
-            .eq("symbol", symbol) \
-            .order("created_at", desc=False) \
-            .limit(limit) \
-            .execute()
-        if res.data:
-            return res.data
-    except Exception as e:
-        log_to_console("Supabase History Fetch Error", str(e))
-    return []
-
 # --- INICIALIZACIÓN DE ESTADOS Y SISTEMA DE LOGS ---
 if "console_logs" not in st.session_state:
     st.session_state.console_logs = []
@@ -537,11 +502,11 @@ tz_target = "America/Lima" if "UTC-5" in tz_choice else "America/New_York"
 
 st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
 
-auto_refresh = st.sidebar.toggle("AUTO-REFRESCO EN VIVO", value=True)
+auto_refresh = st.sidebar.toggle("AUTO-REFRESCO EN VIVO", value=False)
 refresh_interval = st.sidebar.select_slider(
     "INTERVALO (SEGUNDOS)",
-    options=[1, 2, 5, 10, 15, 30, 60],
-    value=1,
+    options=[10, 15, 30, 60],
+    value=15,
     disabled=not auto_refresh
 )
 
@@ -559,7 +524,7 @@ if st.sidebar.button("🔄 ACTUALIZAR DATOS AHORA", use_container_width=True):
     st.rerun()
 
 # --- FUNCIONES DE MERCADO SCHWAB CACHEADAS ---
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=15)
 def fetch_history_schwab(symbol):
     if not client:
         return pd.DataFrame()
@@ -591,7 +556,7 @@ def fetch_history_schwab(symbol):
         log_to_console("fetch_history_schwab", str(e))
     return pd.DataFrame()
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=15)
 def fetch_option_chain_schwab(symbol, strikes_count):
     if not client:
         return {}
@@ -611,7 +576,7 @@ def fetch_option_chain_schwab(symbol, strikes_count):
         log_to_console("fetch_option_chain_schwab", str(e))
     return {}
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=15)
 def fetch_nq_price_schwab():
     if not client:
         return 0.0
@@ -628,11 +593,10 @@ def fetch_nq_price_schwab():
         log_to_console("fetch_nq_price_schwab", str(e))
     return 0.0
 
-# --- PROCESAMIENTO Y DETECCIÓN ESTADO ONLINE / SUPABASE / OFFLINE ---
+# --- PROCESAMIENTO Y DETECCIÓN ESTADO ONLINE / OFFLINE ---
 now_tz = pd.Timestamp.now(tz=tz_target)
 ref_today = now_tz.floor('D').tz_localize(None)
 
-latest_supabase_snap = fetch_supabase_latest_snapshot(ticker_symbol)
 hist_raw = fetch_history_schwab(ticker_symbol)
 chain_raw = fetch_option_chain_schwab(ticker_symbol, strike_range)
 
@@ -645,9 +609,6 @@ if isinstance(chain_raw, dict):
             spot_price = float(raw_spot)
         except (ValueError, TypeError):
             spot_price = 0.0
-
-if (spot_price <= 0 or np.isnan(spot_price)) and latest_supabase_snap:
-    spot_price = float(latest_supabase_snap.get("spot", 0.0))
 
 if (spot_price <= 0 or np.isnan(spot_price)) and not hist_raw.empty and 'Close' in hist_raw:
     try:
@@ -727,7 +688,7 @@ def parse_schwab_chain(chain_data):
 
 df_curr, exp_0dte = parse_schwab_chain(chain_raw)
 
-# --- EVALUACIÓN DE ESTADO REAL (ONLINE / SUPABASE / OFFLINE) ---
+# --- EVALUACIÓN DE ESTADO REAL (ONLINE vs OFFLINE) ---
 is_online = False
 is_cloud_backup = False
 
@@ -737,20 +698,7 @@ if client is not None and isinstance(chain_raw, dict) and len(chain_raw) > 0 and
 jsonbin_history_data = fetch_jsonbin_history(JSONBIN_BIN_ID, JSONBIN_API_KEY)
 
 if not is_online:
-    if latest_supabase_snap:
-        is_cloud_backup = True
-        spot_price = float(latest_supabase_snap.get("spot", spot_price))
-        cloud_strikes = latest_supabase_snap.get("strikes", [])
-        if cloud_strikes:
-            df_curr = pd.DataFrame(cloud_strikes)
-            for col in ['openInterest_c', 'openInterest_p']:
-                if col not in df_curr.columns: df_curr[col] = 1000
-            for col in ['iv_c', 'iv_p']:
-                if col not in df_curr.columns: df_curr[col] = 0.20
-            for col in ['delta_c', 'delta_p', 'theta_c', 'theta_p', 'vega_c', 'vega_p']:
-                if col not in df_curr.columns: df_curr[col] = 0.0
-            exp_0dte = now_tz.strftime('%Y-%m-%d')
-    elif jsonbin_history_data:
+    if jsonbin_history_data:
         available_cloud_dates = sorted(list(jsonbin_history_data.keys()))
         if available_cloud_dates:
             latest_date_key = available_cloud_dates[-1]
@@ -807,25 +755,10 @@ if not h_1m.empty and is_online:
     spot_series = h_1m_reindexed['Close'].ffill().bfill()
     full_spots = spot_series.fillna(spot_price).tolist()
     
+    # SINCRONIZACIÓN CORREGIDA: Sincronizar el spot_price con la última vela real
     if full_spots and full_spots[-1] > 0:
         spot_price = float(full_spots[-1])
 
-elif is_cloud_backup and latest_supabase_snap:
-    supabase_history = fetch_supabase_gex_history(ticker_symbol, limit=390)
-    if supabase_history:
-        full_timestamps = [pd.to_datetime(s.get("created_at")).strftime('%H:%M') for s in supabase_history]
-        full_spots = [s.get("spot", spot_price) for s in supabase_history]
-        if full_spots and full_spots[-1] > 0:
-            spot_price = float(full_spots[-1])
-        
-        h_1m_reindexed = pd.DataFrame({
-            'Open': full_spots, 'High': [v + 0.3 for v in full_spots],
-            'Low': [v - 0.3 for v in full_spots], 'Close': full_spots,
-            'Volume': [1500 for _ in full_spots]
-        }, index=full_time_grid[:len(full_spots)])
-    else:
-        full_spots = [spot_price]
-        h_1m_reindexed = pd.DataFrame()
 elif is_cloud_backup and jsonbin_history_data:
     available_cloud_dates = sorted(list(jsonbin_history_data.keys()))
     latest_date_key = available_cloud_dates[-1]
@@ -860,11 +793,12 @@ elif is_cloud_backup and jsonbin_history_data:
     else:
         full_spots = []
 else:
+    # --- GENERADOR INTRADÍA SINTÉTICO (SINCRONIZADO) ---
     np.random.seed(42)
     n_mins = len(full_timestamps)
     price_changes = np.random.normal(0, 0.15, n_mins)
     cum_drift = np.cumsum(price_changes)
-    cum_drift = cum_drift - cum_drift[-1]
+    cum_drift = cum_drift - cum_drift[-1]  # Asegura que el punto final sea exactamente spot_price
     full_spots = (spot_price + cum_drift).tolist()
     
     syn_opens = full_spots.copy()
@@ -930,7 +864,7 @@ with col_head_badge:
     if is_online:
         st.markdown('<div class="badge-online">🟢 ONLINE (EN VIVO)</div>', unsafe_allow_html=True)
     elif is_cloud_backup:
-        st.markdown('<div class="badge-warning">⚡ SUPABASE REALTIME</div>', unsafe_allow_html=True)
+        st.markdown('<div class="badge-warning">🟠 OFFLINE (NUBE)</div>', unsafe_allow_html=True)
     else:
         st.markdown('<div class="badge-warning">🟡 SIMULADO (FALLBACK)</div>', unsafe_allow_html=True)
 
@@ -1154,7 +1088,7 @@ else:
     last_call_drift, last_put_drift, last_net_drift = 0.0, 0.0, 0.0
 
 # GENERADOR SINTÉTICO DE HISTORIAL JSONBIN PARA BACKGAMMA SI ESTÁ VACÍO
-if not jsonbin_history_data and not latest_supabase_snap:
+if not jsonbin_history_data:
     mock_date = now_tz.strftime('%Y-%m-%d')
     mock_snaps = []
     mock_times = [t.strftime('%H:%M') for t in pd.date_range("09:30", "16:00", freq="5min")]
@@ -1332,14 +1266,7 @@ k8.markdown(f'<div class="metric-card"><div class="metric-label">Zero Gamma</div
 
 st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
-# --- ALMACENAMIENTO DE SNAPSHOTS 1-MINUTO EN SUPABASE Y JSONBIN ---
-def push_to_supabase_bg(snapshot_payload):
-    if supabase:
-        try:
-            supabase.table("gex_snapshots").insert(snapshot_payload).execute()
-        except Exception as e:
-            log_to_console("Supabase Async Snapshot Error", str(e))
-
+# --- ALMACENAMIENTO DE SNAPSHOTS 1-MINUTO EN JSONBIN ---
 def push_to_jsonbin_bg(bin_id, api_key, date_key, snapshot_entry):
     try:
         url = f"https://api.jsonbin.io/v3/b/{bin_id}"
@@ -1371,7 +1298,7 @@ def push_to_jsonbin_bg(bin_id, api_key, date_key, snapshot_entry):
         log_to_console("JSONBin Async Background Push", str(e))
 
 def export_snapshot_throttled():
-    if not is_online:
+    if ticker_symbol != "QQQ" or not is_online:
         return
 
     last_export = st.session_state.get("last_export_time", 0)
@@ -1393,23 +1320,19 @@ def export_snapshot_throttled():
             })
         
         snapshot_entry = {
-            "symbol": ticker_symbol,
             "time": time_str,
             "spot": float(spot_price),
             "net_gex": float(net_gex_total),
             "strikes": strikes_payload
         }
         
-        t_sp = threading.Thread(target=push_to_supabase_bg, args=(snapshot_entry,), daemon=True)
-        t_sp.start()
-
         if JSONBIN_BIN_ID and JSONBIN_API_KEY:
-            t_jb = threading.Thread(
+            t = threading.Thread(
                 target=push_to_jsonbin_bg,
                 args=(JSONBIN_BIN_ID, JSONBIN_API_KEY, date_str, snapshot_entry),
                 daemon=True
             )
-            t_jb.start()
+            t.start()
 
 export_snapshot_throttled()
 
@@ -2022,9 +1945,9 @@ with tab_greeks:
 
                 fig_chex.update_layout(
                     template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                    title="Charm Exposure Total (CHEX) por Strike ($ Millones/día)",
+                    title="Charm Exposure Total (CHEX - Cambio de Delta por Paso del Tiempo $M/día)",
                     xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", **xaxis_kwargs),
-                    yaxis=dict(title="CHEX ($M/día)", gridcolor="rgba(255,255,255,0.05)"),
+                    yaxis=dict(title="CHEX ($ Millones)", gridcolor="rgba(255,255,255,0.05)"),
                     height=560, margin=dict(l=50, r=40, t=50, b=40)
                 )
                 st.plotly_chart(fig_chex, use_container_width=True)
