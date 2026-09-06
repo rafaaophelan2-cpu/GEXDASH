@@ -1,0 +1,32 @@
+name: Live GEX Worker
+
+on:
+  schedule:
+    # Se ejecuta cada 5 minutos de lunes a viernes
+    - cron: '*/5 * * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  run-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar Dependencias
+        run: |
+          pip install requests pandas numpy scipy schwab-py
+
+      - name: Ejecutar Worker
+        env:
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          SCHWAB_TOKEN: ${{ secrets.SCHWAB_TOKEN }}
+          JSONBIN_BIN_ID: ${{ secrets.JSONBIN_BIN_ID }}
+          JSONBIN_API_KEY: ${{ secrets.JSONBIN_API_KEY }}
+        run: python worker.py
