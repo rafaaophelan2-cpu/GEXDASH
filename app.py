@@ -602,7 +602,7 @@ def fetch_option_chain_schwab(symbol, strikes_count):
             contract_type=contract_type,
             strike_count=strikes_count,
             from_date=today,
-            to_date=today + timedelta(days=30)
+            to_date=today + timedelta(days=7)
         )
         if resp.status_code == 200:
             return resp.json()
@@ -742,54 +742,6 @@ def parse_schwab_chain(chain_data):
     df = pd.DataFrame(list(records.values())).sort_values('strike').reset_index(drop=True) if records else pd.DataFrame()
     return df, selected_exp
 
-# --- PARSER DEDICADO PARA VOLATILITY SURFACE ---
-def parse_vol_surface_schwab(chain_data, min_k, max_k):
-    if not isinstance(chain_data, dict) or not chain_data:
-        return pd.DataFrame()
-        
-    call_map = chain_data.get('callExpDateMap') or {}
-    put_map = chain_data.get('putExpDateMap') or {}
-    all_exps = sorted(list(set(list(call_map.keys()) + list(put_map.keys()))))
-    
-    rows = []
-    def extract_iv_val(opt):
-        v = float(opt.get('volatility', opt.get('impliedVolatility', 0.0)))
-        if v > 2.0: v = v / 100.0
-        return max(v, 0.001)
-
-    for exp_key in all_exps:
-        exp_date_str = exp_key.split(':')[0] if ':' in exp_key else exp_key
-        c_dict = call_map.get(exp_key, {})
-        p_dict = put_map.get(exp_key, {})
-        all_stk_keys = set(list(c_dict.keys()) + list(p_dict.keys()))
-        
-        for strike_str in all_stk_keys:
-            try:
-                strike = float(strike_str)
-            except ValueError:
-                continue
-            if strike < min_k or strike > max_k:
-                continue
-            
-            c_opt = c_dict.get(strike_str, [{}])[0] if c_dict.get(strike_str) else {}
-            p_opt = p_dict.get(strike_str, [{}])[0] if p_dict.get(strike_str) else {}
-            
-            iv_c = extract_iv_val(c_opt) if c_opt else 0.0
-            iv_p = extract_iv_val(p_opt) if p_opt else 0.0
-            
-            if iv_c > 0 and iv_p > 0:
-                iv_final = (iv_c + iv_p) / 2.0
-            else:
-                iv_final = max(iv_c, iv_p)
-            
-            if iv_final > 0:
-                rows.append({
-                    'expiration': exp_date_str,
-                    'strike': strike,
-                    'iv': iv_final * 100.0
-                })
-    return pd.DataFrame(rows)
-
 df_curr, exp_0dte = parse_schwab_chain(chain_raw)
 
 is_online = False
@@ -857,24 +809,6 @@ full_timestamps = full_time_grid.strftime('%H:%M').tolist()
 min_strike = int(np.floor(spot_price - strike_range)) if spot_price > 0 else 0
 max_strike = int(np.ceil(spot_price + strike_range)) if spot_price > 0 else 100
 fine_strikes = np.linspace(min_strike, max_strike, int((max_strike - min_strike) * 2 + 1))
-
-# Carga de Volatility Surface desde datos reales o generación sintética
-df_volsurf = parse_vol_surface_schwab(chain_raw, min_strike, max_strike)
-
-if df_volsurf.empty:
-    syn_exp_dates = [(now_tz + timedelta(days=d)).strftime('%Y-%m-%d') for d in [0, 1, 3, 7, 14, 30]]
-    syn_vol_rows = []
-    for d_idx, exp_d in enumerate(syn_exp_dates):
-        dte = [0.5, 1, 3, 7, 14, 30][d_idx]
-        for st_v in fine_strikes:
-            dist = (st_v - spot_price) / spot_price
-            skew = 0.18 + 0.08 * (dist**2) - 0.04 * dist + 0.01 * np.sqrt(dte)
-            syn_vol_rows.append({
-                'expiration': exp_d,
-                'strike': float(st_v),
-                'iv': max(skew * 100.0, 5.0)
-            })
-    df_volsurf = pd.DataFrame(syn_vol_rows)
 
 if not h_1m.empty and is_online:
     h_1m = h_1m.tz_convert(tz_target)
@@ -1606,14 +1540,13 @@ def export_snapshot_throttled():
 export_snapshot_throttled()
 
 # --- PESTAÑAS PRINCIPALES ---
-tab_gex, tab_live, tab_drift, tab_greeks, tab_back, tab_data, tab_volsurf = st.tabs([
+tab_gex, tab_live, tab_drift, tab_greeks, tab_back, tab_data = st.tabs([
     "GEX INFO",
     "LIVE GAMMA",
     "NET DRIFT",
     "GREEKS",
     "BACKGAMMA",
-    "DATA",
-    "VOL SURFACE"
+    "DATA"
 ])
 
 # --- 1. GEX INFO ---
@@ -1871,7 +1804,7 @@ with tab_greeks:
                 fig_net_chex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Charm Exposure (CHEX) Profile por Strike (M USD/día)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
                 st.plotly_chart(fig_net_chex, use_container_width=True)
 
-        # 5. VANNA (VANNA EX)
+        # 5. VANNA (VANNA)
         with sub_grk5:
             if not df_grk_sub.empty and 'net_vanna' in df_grk_sub.columns:
                 fig_net_vanna = go.Figure()
@@ -1880,109 +1813,101 @@ with tab_greeks:
                 if spot_price > 0: fig_net_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
                 fig_net_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Vanna Exposure Profile por Strike (M USD)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
                 st.plotly_chart(fig_net_vanna, use_container_width=True)
-
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 5. BACKGAMMA ---
 with tab_back:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📜 Histórico e Intraday BackGamma</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📜 BACKGAMMA - HISTÓRICO DE CAPTURAS</h3>", unsafe_allow_html=True)
+    
     if jsonbin_history_data:
-        avail_dates = sorted(list(jsonbin_history_data.keys()), reverse=True)
-        sel_date = st.selectbox("Seleccionar Fecha de Snapshot:", avail_dates)
+        dates_avail = sorted(list(jsonbin_history_data.keys()), reverse=True)
+        sel_date = st.selectbox("Seleccionar Fecha de Historial:", dates_avail)
+        
         day_snaps = jsonbin_history_data.get(sel_date, [])
         if day_snaps:
-            df_snaps = pd.DataFrame(day_snaps)
-            st.dataframe(df_snaps[['time', 'spot', 'net_gex']], use_container_width=True)
+            times_hist = [s.get("time") for s in day_snaps]
+            spots_hist = [s.get("spot") for s in day_snaps]
+            gex_hist = [s.get("net_gex") for s in day_snaps]
+            
+            fig_back = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, subplot_titles=(f"Precio Spot ({sel_date})", "Net GEX Intradía"))
+            fig_back.add_trace(go.Scatter(x=times_hist, y=spots_hist, mode='lines+markers', name='Spot', line=dict(color='#3B82F6', width=2)), row=1, col=1)
+            fig_back.add_trace(go.Bar(x=times_hist, y=gex_hist, name='Net GEX', marker_color=['#10B981' if v>=0 else '#EF4444' for v in gex_hist]), row=2, col=1)
+            fig_back.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', height=500, showlegend=False)
+            st.plotly_chart(fig_back, use_container_width=True)
         else:
             st.info("No hay datos para la fecha seleccionada.")
     else:
-        st.info("No hay historial de BackGamma registrado en la base de datos.")
+        st.info("No hay historial de Backgamma disponible.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 6. DATA ---
 with tab_data:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📋 Tabla de Cadenas de Opciones y Exposición Gamma</h3>", unsafe_allow_html=True)
-    if not df_curr.empty:
-        st.dataframe(df_curr, use_container_width=True, height=500)
-    else:
-        st.warning("No hay datos de cadena de opciones disponibles.")
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.15rem; letter-spacing:0.5px;'>📋 DATA SUMMARY & DIAGNÓSTICO INSTITUCIONAL</h3>", unsafe_allow_html=True)
+    
+    st.markdown(f"""
+        <div class="data-summary-box">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h4 style="margin: 0; font-family: 'Plus Jakarta Sans'; font-weight: 700; color: #60A5FA;">⚡ Resumen Ejecutivo de Mercado ({ticker_symbol})</h4>
+                <span style="font-family: 'JetBrains Mono'; font-size: 0.8rem; color: #8B949E;">Índice VIX: <b style="color: {vix_color};">{vix_val:.2f}</b> ({vix_status})</span>
+            </div>
+            <p style="font-family: 'JetBrains Mono'; font-size: 0.82rem; color: #D1D5DB; margin-bottom: 8px;">
+                ● <b>Spot Price:</b> ${spot_price:.2f} USD | <b>Zero Gamma (Flip):</b> ${zero_gamma:.2f} USD | <b>Régimen:</b> <span style="color: {'#10B981' if net_gex_total >= 0 else '#EF4444'};">{regime_str.upper()}</span><br>
+                ● <b>Call Wall Principal (CW1):</b> ${cw1:.0f} USD | <b>Put Wall Principal (PW1):</b> ${pw1:.0f} USD<br>
+                ● <b>Net GEX Total:</b> {fmt_val(net_gex_total)} | <b>Net DEX:</b> ${net_dex_total:.2f}M USD | <b>IV ATM:</b> {iv_str}
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
 
-# --- 7. VOL SURFACE (A LA DERECHA DE DATA) ---
-with tab_volsurf:
-    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown(f"<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>🌐 3D Volatility Surface ({ticker_symbol})</h3>", unsafe_allow_html=True)
-    st.markdown("<p style='color:#8B949E; font-family:\"JetBrains Mono\"; font-size:0.78rem;'>Superficie tridimensional de Volatilidad Implícita: Strike (Eje Y) x Expiración (Eje X) x IV % (Eje Z - Altura)</p>", unsafe_allow_html=True)
+    col_diag_btn, col_diag_space = st.columns([3.5, 6.5])
+    with col_diag_btn:
+        btn_gen_diag = st.button("🤖 GENERAR DIAGNÓSTICO DE MERCADO (IA)", key="btn_data_ia_diag", use_container_width=True)
 
-    if not df_volsurf.empty:
-        try:
-            pivot_volsurf = df_volsurf.pivot(index='strike', columns='expiration', values='iv')
-            pivot_volsurf = pivot_volsurf.interpolate(axis=0, method='linear').interpolate(axis=1, method='linear').bfill().ffill()
-            
-            sorted_cols = sorted(pivot_volsurf.columns)
-            pivot_volsurf = pivot_volsurf[sorted_cols]
-
-            fig_vol_3d = go.Figure(data=[
-                go.Surface(
-                    x=list(pivot_volsurf.columns),
-                    y=list(pivot_volsurf.index),
-                    z=pivot_volsurf.values,
-                    colorscale='Viridis',
-                    hovertemplate="<b>Expiración:</b> %{x}<br><b>Strike:</b> $%{y:.2f}<br><b>IV:</b> %{z:.2f}%<extra></extra>",
-                    colorbar=dict(
-                        title="IV (%)",
-                        len=0.8,
-                        titlefont=dict(color="#F0F6FC", family="JetBrains Mono"),
-                        tickfont=dict(color="#8B949E", family="JetBrains Mono")
-                    )
+    if btn_gen_diag or st.session_state.get("data_ia_diag_result"):
+        if btn_gen_diag:
+            with st.spinner("Procesando análisis profundo y generando Escenarios A, B y C..."):
+                prompt_diag = (
+                    f"Genera un Diagnóstico de Mercado e informe táctico completo para {ticker_symbol} "
+                    f"con base en el resumen de datos actual. Incluye un análisis exhaustivo del impacto del VIX en {vix_val:.2f}, "
+                    f"el comportamiento esperado según el régimen de Gamma, el desglose de Griegas (DEX, TEX, VEX, CHEX, VANNA) "
+                    f"y OBLIGATORIAMENTE los Escenarios A (Continuación / Retesteo Aceptado), B (Rechazo en Nivel Clave) y "
+                    f"C (Trampa / Falsa Ruptura - Liquidity Sweep) especificando los precios numéricos exactos de entrada y objetivo."
                 )
-            ])
+                diag_output = consultar_ia(tipo_analisis="Diagnóstico Data Summary", mensaje_usuario=prompt_diag)
+                st.session_state["data_ia_diag_result"] = diag_output
 
-            fig_vol_3d.update_layout(
-                template="plotly_dark",
-                plot_bgcolor='#06080D',
-                paper_bgcolor='#06080D',
-                title=dict(text=f"<b>3D Volatility Surface - Strike x Expiración x IV ({ticker_symbol})</b>", font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")),
-                scene=dict(
-                    xaxis=dict(title="Expiración", backgroundcolor="#06080D", gridcolor="rgba(255,255,255,0.1)", tickfont=dict(family="JetBrains Mono", color="#8B949E"), titlefont=dict(color="#F0F6FC", family="JetBrains Mono")),
-                    yaxis=dict(title="Strike ($)", backgroundcolor="#06080D", gridcolor="rgba(255,255,255,0.1)", tickfont=dict(family="JetBrains Mono", color="#8B949E"), titlefont=dict(color="#F0F6FC", family="JetBrains Mono")),
-                    zaxis=dict(title="IV (%)", backgroundcolor="#06080D", gridcolor="rgba(255,255,255,0.1)", tickfont=dict(family="JetBrains Mono", color="#8B949E"), titlefont=dict(color="#F0F6FC", family="JetBrains Mono")),
-                    camera=dict(eye=dict(x=-1.6, y=-1.6, z=1.2))
-                ),
-                height=680,
-                margin=dict(l=20, r=20, t=50, b=20)
-            )
+        if "data_ia_diag_result" in st.session_state:
+            st.markdown("<div style='margin-top: 15px; padding: 18px; background: rgba(14, 19, 31, 0.95); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 10px;'>", unsafe_allow_html=True)
+            st.markdown(st.session_state["data_ia_diag_result"])
+            st.markdown("</div>", unsafe_allow_html=True)
 
-            st.plotly_chart(fig_vol_3d, use_container_width=True, key="vol_surface_3d")
-
-            st.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
-            st.markdown("<h4 style='color:#F0F6FC; font-family:\"Plus Jakarta Sans\"; font-size:0.95rem; font-weight:700;'>📉 Volatility Skew por Expiración (Proyección 2D)</h4>", unsafe_allow_html=True)
-            
-            fig_skew = go.Figure()
-            for col_exp in sorted_cols:
-                fig_skew.add_trace(go.Scatter(
-                    x=pivot_volsurf.index,
-                    y=pivot_volsurf[col_exp],
-                    mode='lines+markers',
-                    name=f"Exp {col_exp}"
-                ))
-            
-            if spot_price > 0:
-                fig_skew.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})", annotation_font=dict(color="#60A5FA", size=10))
-
-            fig_skew.update_layout(
-                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-                xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono")),
-                yaxis=dict(title="Implied Volatility (%)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono")),
-                height=420, margin=dict(l=50, r=40, t=30, b=40)
-            )
-            st.plotly_chart(fig_skew, use_container_width=True, key="vol_skew_2d")
-
-        except Exception as e_vol:
-            st.error(f"Error al renderizar Volatility Surface: {str(e_vol)}")
-            log_to_console("Vol Surface Render Error", str(e_vol))
+    st.markdown("<hr style='border-color:rgba(255,255,255,0.08); margin: 25px 0;'>", unsafe_allow_html=True)
+    st.markdown("<h4 style='font-family:\"Plus Jakarta Sans\"; font-weight:700; color:#F0F6FC;'>📊 Cadena de Opciones y Exposición Cuantitativa por Strike</h4>", unsafe_allow_html=True)
+    
+    if not df_curr.empty:
+        cols_show = ['strike', 'openInterest_c', 'openInterest_p', 'call_gex', 'put_gex', 'net_gex', 'call_dex', 'put_dex', 'net_dex', 'iv_c', 'iv_p']
+        available_cols = [c for c in cols_show if c in df_curr.columns]
+        
+        df_display = df_curr[available_cols].copy()
+        st.dataframe(
+            df_display.style.format({
+                'strike': '${:.2f}',
+                'openInterest_c': '{:,.0f}',
+                'openInterest_p': '{:,.0f}',
+                'call_gex': lambda v: fmt_val(v),
+                'put_gex': lambda v: fmt_val(v),
+                'net_gex': lambda v: fmt_val(v),
+                'call_dex': '${:.2f}M',
+                'put_dex': '${:.2f}M',
+                'net_dex': '${:.2f}M',
+                'iv_c': '{:.2%}',
+                'iv_p': '{:.2%}'
+            }),
+            use_container_width=True,
+            height=450
+        )
     else:
-        st.info("No hay suficientes datos de expiración e IV para generar la Volatility Surface.")
+        st.info("No hay datos de opciones disponibles para mostrar en la tabla.")
+        
     st.markdown('</div>', unsafe_allow_html=True)
