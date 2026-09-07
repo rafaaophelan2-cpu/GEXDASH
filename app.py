@@ -784,7 +784,10 @@ if not is_online:
                 if col not in df_curr.columns: df_curr[col] = 0.20
             for col in ['delta_c', 'delta_p', 'theta_c', 'theta_p', 'vega_c', 'vega_p', 'vanna_c', 'vanna_p']:
                 if col not in df_curr.columns: df_curr[col] = 0.0
-            exp_0dte = now_tz.strftime('%Y-%m-%d')
+            exp_0dte = now_tz.strftime('%Y-%m-%d') + ":0"
+            if 'exp_date' not in df_curr.columns: df_curr['exp_date'] = exp_0dte.split(':')[0]
+            if 'dte' not in df_curr.columns: df_curr['dte'] = 0
+            if 'exp_key' not in df_curr.columns: df_curr['exp_key'] = exp_0dte
     elif jsonbin_history_data:
         available_cloud_dates = sorted(list(jsonbin_history_data.keys()))
         if available_cloud_dates:
@@ -804,7 +807,10 @@ if not is_online:
                         if col not in df_curr.columns: df_curr[col] = 0.20
                     for col in ['delta_c', 'delta_p', 'theta_c', 'theta_p', 'vega_c', 'vega_p', 'vanna_c', 'vanna_p']:
                         if col not in df_curr.columns: df_curr[col] = 0.0
-                    exp_0dte = latest_date_key
+                    exp_0dte = latest_date_key + ":0"
+                    if 'exp_date' not in df_curr.columns: df_curr['exp_date'] = latest_date_key
+                    if 'dte' not in df_curr.columns: df_curr['dte'] = 0
+                    if 'exp_key' not in df_curr.columns: df_curr['exp_key'] = exp_0dte
 
 if spot_price <= 0:
     spot_price = TICKER_DEFAULTS.get(ticker_symbol, 480.00)
@@ -1054,12 +1060,23 @@ def recalculate_gex_for_spot(df_input, spot_t, T_exp, iv):
     df_out['net_gex'] = df_out['call_gex'] + df_out['put_gex']
     return df_out
 
-if not df_curr.empty and exp_0dte is not None and spot_price > 0:
-    exp_date_part = exp_0dte.split(':')[0] if isinstance(exp_0dte, str) and ':' in exp_0dte else str(exp_0dte)
-    try:
-        exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
-        days_to_exp = max((exp_dt - ref_today).days, 0)
-    except Exception:
+if not df_curr.empty and spot_price > 0:
+    # NOTA: antes esta condicion tambien exigia "exp_0dte is not None", lo que
+    # acoplaba el calculo de TODAS las Griegas (DEX/TEX/VEX/CHEX/VANNA) e incluso
+    # el propio GEX a la disponibilidad de una fecha de expiracion valida. Si
+    # exp_0dte llegaba como None por cualquier motivo (fallback de datos, timing
+    # de carga, etc.), ninguna de estas columnas se generaba en df_curr y todos
+    # los perfiles de Griegas quedaban vacios en TODOS los DTE. Se desacopla:
+    # ahora solo se necesita tener datos y un spot valido; exp_0dte solo afecta
+    # el calculo de T_exp (dias a vencimiento) para la recalibracion dinamica.
+    if exp_0dte is not None:
+        exp_date_part = exp_0dte.split(':')[0] if isinstance(exp_0dte, str) and ':' in exp_0dte else str(exp_0dte)
+        try:
+            exp_dt = pd.to_datetime(exp_date_part).tz_localize(None)
+            days_to_exp = max((exp_dt - ref_today).days, 0)
+        except Exception:
+            days_to_exp = 0
+    else:
         days_to_exp = 0
     T_exp = max(days_to_exp / 365.0, 0.5 / 365.0)
 
@@ -1896,18 +1913,37 @@ with tab_gex:
         if not df_gex_filtered.empty and 'strike' in df_gex_filtered.columns:
             df_sub = df_gex_filtered[(df_gex_filtered['strike'] >= min_strike) & (df_gex_filtered['strike'] <= max_strike)].copy()
             if not df_sub.empty:
+                df_sub = df_sub.reset_index(drop=True)
                 colors = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub['net_gex']]
                 xaxis_kwargs = safe_strike_range(df_sub)
 
                 y_max_val = df_sub['net_gex'].max()
                 y_min_val = df_sub['net_gex'].min()
-                y_max_adj = (max(y_max_val, 0) * 1.5) if y_max_val > 0 else 1000
-                y_min_adj = (min(y_min_val, 0) * 1.5) if y_min_val < 0 else -1000
+                # Poco margen (headroom) por encima/debajo del maximo y minimo real:
+                # esto hace que las barras "llenen" casi todo el alto disponible del
+                # recuadro (casi el doble de largo visualmente que antes, cuando el
+                # margen era 1.5x el valor maximo/minimo).
+                y_max_adj = (max(y_max_val, 0) * 1.08) if y_max_val > 0 else 1000
+                y_min_adj = (min(y_min_val, 0) * 1.08) if y_min_val < 0 else -1000
+
+                # Resalta con borde blanco la barra verde (positiva) de mayor valor
+                # y la barra roja (negativa) de mayor valor negativo.
+                max_pos_idx = df_sub['net_gex'].idxmax() if (df_sub['net_gex'] > 0).any() else None
+                min_neg_idx = df_sub['net_gex'].idxmin() if (df_sub['net_gex'] < 0).any() else None
+                line_colors = []
+                line_widths = []
+                for idx in df_sub.index:
+                    if idx == max_pos_idx or idx == min_neg_idx:
+                        line_colors.append('#FFFFFF')
+                        line_widths.append(2.5)
+                    else:
+                        line_colors.append('rgba(0,0,0,0)')
+                        line_widths.append(0)
 
                 fig1 = go.Figure()
                 fig1.add_trace(go.Bar(
                     x=df_sub['strike'], y=df_sub['net_gex'],
-                    orientation='v', marker_color=colors,
+                    orientation='v', marker=dict(color=colors, line=dict(color=line_colors, width=line_widths)),
                     hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net GEX:</b> %{customdata}<extra></extra>",
                     customdata=[fmt_val(v) for v in df_sub['net_gex']]
                 ))
@@ -1924,7 +1960,7 @@ with tab_gex:
                     title=dict(text="<b>Strike Profile (Net Gamma Exposure)</b>", font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")),
                     xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono", color="#8B949E"), zeroline=False, **xaxis_kwargs),
                     yaxis=dict(title="Net GEX ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono", color="#8B949E"), zeroline=True, zerolinecolor="rgba(255,255,255,0.15)", zerolinewidth=1, range=[y_min_adj, y_max_adj]),
-                    height=560, margin=dict(l=50, r=40, t=50, b=40)
+                    height=980, margin=dict(l=50, r=40, t=50, b=40)
                 )
                 st.plotly_chart(fig1, use_container_width=True)
 
