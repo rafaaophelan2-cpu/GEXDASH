@@ -699,6 +699,15 @@ def parse_schwab_chain(chain_data):
             vol = vol / 100.0
         return max(vol, 0.001)
 
+    def clean_greek(val, default=0.0):
+        try:
+            v = float(val)
+            if np.isnan(v) or np.isinf(v) or v <= -500.0 or v >= 500.0:
+                return default
+            return v
+        except (ValueError, TypeError):
+            return default
+
     for strike_str, opt_list in calls_for_exp.items():
         if not opt_list: continue
         opt = opt_list[0]
@@ -714,11 +723,11 @@ def parse_schwab_chain(chain_data):
                 'vanna_c': 0.0, 'vanna_p': 0.0,
                 'iv_c': 0.0, 'iv_p': 0.0
             }
-        records[strike]['openInterest_c'] = opt.get('openInterest', 0)
-        records[strike]['gamma_c'] = opt.get('gamma', 0.0)
-        records[strike]['delta_c'] = opt.get('delta', 0.0)
-        records[strike]['theta_c'] = opt.get('theta', 0.0)
-        records[strike]['vega_c'] = opt.get('vega', 0.0)
+        records[strike]['openInterest_c'] = int(opt.get('openInterest', 0))
+        records[strike]['gamma_c'] = clean_greek(opt.get('gamma'))
+        records[strike]['delta_c'] = abs(clean_greek(opt.get('delta')))
+        records[strike]['theta_c'] = clean_greek(opt.get('theta'))
+        records[strike]['vega_c'] = clean_greek(opt.get('vega'))
         records[strike]['iv_c'] = extract_iv(opt)
 
     for strike_str, opt_list in puts_for_exp.items():
@@ -736,11 +745,11 @@ def parse_schwab_chain(chain_data):
                 'vanna_c': 0.0, 'vanna_p': 0.0,
                 'iv_c': 0.0, 'iv_p': 0.0
             }
-        records[strike]['openInterest_p'] = opt.get('openInterest', 0)
-        records[strike]['gamma_p'] = opt.get('gamma', 0.0)
-        records[strike]['delta_p'] = opt.get('delta', 0.0)
-        records[strike]['theta_p'] = opt.get('theta', 0.0)
-        records[strike]['vega_p'] = opt.get('vega', 0.0)
+        records[strike]['openInterest_p'] = int(opt.get('openInterest', 0))
+        records[strike]['gamma_p'] = clean_greek(opt.get('gamma'))
+        records[strike]['delta_p'] = -abs(clean_greek(opt.get('delta')))
+        records[strike]['theta_p'] = clean_greek(opt.get('theta'))
+        records[strike]['vega_p'] = clean_greek(opt.get('vega'))
         records[strike]['iv_p'] = extract_iv(opt)
 
     df = pd.DataFrame(list(records.values())).sort_values('strike').reset_index(drop=True) if records else pd.DataFrame()
