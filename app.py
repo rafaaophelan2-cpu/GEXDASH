@@ -1149,21 +1149,21 @@ else:
 if vix_val <= 0:
     vix_val = (atm_iv * 100) if (atm_iv > 0) else 16.50
 
-if vix_val <= 15.0:
+if vix_val < 15.0:
     vix_status = "Baja Volatilidad"
     vix_desc = "Mercado calmado / TPs cortos"
     vix_color = "#60A5FA"
-elif 16.0 <= vix_val <= 25.0:
-    vix_status = "Volatilidad Normal"
-    vix_desc = "Rango saludable / Runners"
+elif 15.0 <= vix_val < 25.0:
+    vix_status = "Volatilidad Media"
+    vix_desc = "Rango saludable / Aguantar Runners"
     vix_color = "#10B981"
-elif 26.0 <= vix_val <= 30.0:
-    vix_status = "Alta Volatilidad"
-    vix_desc = "Precaución / Vol alta"
+elif 25.0 <= vix_val <= 30.0:
+    vix_status = "Volatilidad Alta"
+    vix_desc = "Rango saludable / Aguantar Runners"
     vix_color = "#F59E0B"
 else:
     vix_status = "Muy Alta Volatilidad"
-    vix_desc = "Mucho miedo en mercado"
+    vix_desc = "Miedo grande / Movimientos muy expansivos"
     vix_color = "#EF4444"
 
 if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
@@ -1249,14 +1249,14 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
         "Esto promueve expansiones direccionales, rupturas agresivas de soportes/resistencias y alta volatilidad."
     )
     
-    if vix_v <= 15.0:
-        vix_guidance = f"**VIX en {vix_v:.2f} (Baja Volatilidad / Mercado Calmado)**: No se esperan movimientos de gran amplitud. Se recomienda mantener **Take Profits (TP) más acotados o cortos**."
-    elif 16.0 <= vix_v <= 25.0:
-        vix_guidance = f"**VIX en {vix_v:.2f} (Volatilidad Normal / Rango Saludable)**: Entorno ideal para mantener **runners** y aprovechar una muy buena acción del precio sin sobresaltos extremos."
-    elif 26.0 <= vix_v <= 30.0:
-        vix_guidance = f"**VIX en {vix_v:.2f} (Alta Volatilidad)**: Precaución por oscilaciones amplias y rápidas de rango. Ajustar la gestión de riesgo."
+    if vix_v < 15.0:
+        vix_guidance = f"**VIX en {vix_v:.2f} (Volatilidad Baja / Calmada)**: Mercado calmado y movimientos poco expansivos. No se recomiendan Take Profits (TP) muy largos."
+    elif 15.0 <= vix_v < 25.0:
+        vix_guidance = f"**VIX en {vix_v:.2f} (Volatilidad Media)**: Volatilidad muy sana para el mercado. Es un excelente entorno para aguantar **runners** (TPs más largos)."
+    elif 25.0 <= vix_v <= 30.0:
+        vix_guidance = f"**VIX en {vix_v:.2f} (Volatilidad Alta)**: Rango saludable para el mercado. Se pueden aguantar **runners** (TPs más largos)."
     else:
-        vix_guidance = f"**VIX en {vix_v:.2f} (Muy Alta Volatilidad / Miedo)**: Volatilidad extrema en el mercado. Reducir el tamaño de posición y ampliar gestión de stop loss."
+        vix_guidance = f"**VIX en {vix_v:.2f} (Muy Alta Volatilidad / Miedo)**: Miedo del mercado muy grande y movimientos altamente expansivos. Reducir tamaño de posición."
 
     if drift_v > 1e6:
         drift_bias = "fuertemente alcista (acumulación dominante de primas Call)"
@@ -1342,11 +1342,10 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
     - Vega Exposure (VEX): {net_vex_val:,.0f} USD/1% IV | Charm Exposure (CHEX): {net_chex_val:.2f}M USD/día | Vanna (VANNA): {net_vanna_val:.2f}M USD
     - Net Premium Drift: {fmt_val(last_net_drift).replace('$', '')} USD
 
-    REGLAS DE INTERPRETACIONAL DEL VIX:
-    1. VIX <= 15: Mercado calmado, volatilidad baja. Recomendar TPs no muy largos ya que los movimientos no deberían ser extendidos.
-    2. VIX 16-25: Volatilidad normal (cerca a 25 es un poco alta). Rango muy saludable para buen price action y mantener runners.
-    3. VIX 26-30: Alta volatilidad, extremar precaución con las oscilaciones.
-    4. VIX 30+: Volatilidad muy alta, mucho miedo en el mercado.
+    REGLAS DE INTERPRETACIÓN DEL VIX:
+    1. VIX < 15: Volatilidad calmada y baja. Recomendar TPs no muy largos ya que los movimientos no son expansivos.
+    2. VIX 15-30 (15-24 media, 25-30 alta): Es la volatilidad más sana para el mercado. Rango ideal para mantener runners (TPs más largos).
+    3. VIX > 30: Volatilidad muy alta, mucho miedo en el mercado y movimientos muy expansivos.
 
     REGLAS DE RESPUESTA OBLIGATORIAS:
     1. NO respondas con mensajes vacíos o saludos genéricos.
