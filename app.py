@@ -627,6 +627,24 @@ def fetch_nq_price_schwab():
         log_to_console("fetch_nq_price_schwab", str(e))
     return 0.0
 
+@st.cache_data(ttl=15)
+def fetch_vix_schwab():
+    if not client:
+        return 0.0
+    try:
+        for sym in ["$VIX", "VIX", "$VIX.X"]:
+            resp = client.get_quote(sym)
+            if resp.status_code == 200:
+                data = resp.json()
+                vix_data = data.get(sym, {}) if isinstance(data, dict) else {}
+                quote_data = vix_data.get("quote", {}) if isinstance(vix_data, dict) else {}
+                price = float(quote_data.get("lastPrice", quote_data.get("closePrice", 0.0)))
+                if price > 0:
+                    return price
+    except Exception as e:
+        log_to_console("fetch_vix_schwab", str(e))
+    return 0.0
+
 now_tz = pd.Timestamp.now(tz=tz_target)
 ref_today = now_tz.floor('D').tz_localize(None)
 
@@ -953,6 +971,8 @@ with col_head_console:
             st.info("No hay errores registrados en la consola.")
 
 nq_price = fetch_nq_price_schwab()
+vix_val = fetch_vix_schwab()
+
 if nq_price > 0 and spot_price > 0:
     conversion_ratio = nq_price / spot_price
 else:
@@ -1123,6 +1143,27 @@ else:
     iv_str = "20.00%"
     iv_rank_str = "N/A"
 
+# --- EVALUACIÓN Y CLASIFICACIÓN DEL VIX ---
+if vix_val <= 0:
+    vix_val = (atm_iv * 100) if (atm_iv > 0) else 16.50
+
+if vix_val <= 15.0:
+    vix_status = "Baja Volatilidad"
+    vix_desc = "Mercado calmado / TPs cortos"
+    vix_color = "#60A5FA"
+elif 16.0 <= vix_val <= 25.0:
+    vix_status = "Volatilidad Normal"
+    vix_desc = "Rango saludable / Runners"
+    vix_color = "#10B981"
+elif 26.0 <= vix_val <= 30.0:
+    vix_status = "Alta Volatilidad"
+    vix_desc = "Precaución / Vol alta"
+    vix_color = "#F59E0B"
+else:
+    vix_status = "Muy Alta Volatilidad"
+    vix_desc = "Mucho miedo en mercado"
+    vix_color = "#EF4444"
+
 if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
     Z_matrix_real = np.zeros((len(fine_strikes), len(full_timestamps)))
     if not df_curr.empty and len(full_timestamps) > 0:
@@ -1185,12 +1226,12 @@ if not jsonbin_history_data and not latest_supabase_snap:
         })
     jsonbin_history_data = {mock_date: mock_snaps}
 
-# --- MOTOR DE ANÁLISIS DEDICADO E IA CON ESCENARIOS ---
+# --- MOTOR DE ANÁLISIS DEDICADO E IA CON ESCENARIOS Y VIX ---
 def generar_analisis_local(ticker, spot, net_gex, regime, condition,
                           call_gex, put_gex, total_gex,
                           cw1_v, cw2_v, cw3_v, pw1_v, pw2_v, pw3_v, zg_v,
                           iv_txt, iv_rank, dex_v, tex_v, vex_v,
-                          chex_v, vanna_v, drift_v):
+                          chex_v, vanna_v, drift_v, vix_v=16.50):
     is_pos = net_gex >= 0
     dist_zg = ((spot - zg_v) / spot) * 100 if spot > 0 else 0.0
     dist_cw1 = ((cw1_v - spot) / spot) * 100 if spot > 0 else 0.0
@@ -1206,6 +1247,15 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
         "Esto promueve expansiones direccionales, rupturas agresivas de soportes/resistencias y alta volatilidad."
     )
     
+    if vix_v <= 15.0:
+        vix_guidance = f"**VIX en {vix_v:.2f} (Baja Volatilidad / Mercado Calmado)**: No se esperan movimientos de gran amplitud. Se recomienda mantener **Take Profits (TP) más acotados o cortos**."
+    elif 16.0 <= vix_v <= 25.0:
+        vix_guidance = f"**VIX en {vix_v:.2f} (Volatilidad Normal / Rango Saludable)**: Entorno ideal para mantener **runners** y aprovechar una muy buena acción del precio sin sobresaltos extremos."
+    elif 26.0 <= vix_v <= 30.0:
+        vix_guidance = f"**VIX en {vix_v:.2f} (Alta Volatilidad)**: Precaución por oscilaciones amplias y rápidas de rango. Ajustar la gestión de riesgo."
+    else:
+        vix_guidance = f"**VIX en {vix_v:.2f} (Muy Alta Volatilidad / Miedo)**: Volatilidad extrema en el mercado. Reducir el tamaño de posición y ampliar gestión de stop loss."
+
     if drift_v > 1e6:
         drift_bias = "fuertemente alcista (acumulación dominante de primas Call)"
     elif drift_v < -1e6:
@@ -1213,7 +1263,6 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
     else:
         drift_bias = "neutral / equilibrado entre flujos de compra y venta"
 
-    # Cálculo dinámico de niveles numéricos para escenarios
     entry_a_call = cw1_v + 0.50
     target_a_call = cw2_v
     entry_a_put = pw1_v - 0.50
@@ -1234,6 +1283,7 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
 #### 1. Estado Actual y Régimen del Mercado
 * **Precio Spot Actual**: ${spot:.2f} USD | **Zero Gamma Level (Flip)**: ${zg_v:.2f} USD ({dist_zg:+.2f}% de distancia).
 * **Régimen Dominante**: {regime_tipo}.
+* **Índice VIX**: {vix_guidance}
 * **Dinámica de Volatilidad**: IV ATM en {iv_txt} (Percentil: {iv_rank}). {behavior}
 
 #### 2. Puntos Clave de Inflexión y Niveles Operativos
@@ -1279,6 +1329,7 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
 
     DATOS DEL MERCADO EN TIEMPO REAL ({ticker_symbol}):
     - Ticker: {ticker_symbol} | Spot Price: {spot_price:.2f} USD | Ratio NQ: {conversion_ratio:.4f}
+    - Índice VIX: {vix_val:.2f} ({vix_status} - {vix_desc})
     - Volatilidad Implícita (IV ATM): {iv_str} | Percentil Rank: {iv_rank_str}
     - Régimen de Gamma: {regime_str} ({condition_str})
     - Net GEX Total: {fmt_val(net_gex_total).replace('$', '')} USD (Call GEX: {fmt_val(call_gex_sum).replace('$', '')} USD, Put GEX: {fmt_val(put_gex_sum).replace('$', '')} USD)
@@ -1289,10 +1340,16 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
     - Vega Exposure (VEX): {net_vex_val:,.0f} USD/1% IV | Charm Exposure (CHEX): {net_chex_val:.2f}M USD/día | Vanna (VANNA): {net_vanna_val:.2f}M USD
     - Net Premium Drift: {fmt_val(last_net_drift).replace('$', '')} USD
 
+    REGLAS DE INTERPRETACIONAL DEL VIX:
+    1. VIX <= 15: Mercado calmado, volatilidad baja. Recomendar TPs no muy largos ya que los movimientos no deberían ser extendidos.
+    2. VIX 16-25: Volatilidad normal (cerca a 25 es un poco alta). Rango muy saludable para buen price action y mantener runners.
+    3. VIX 26-30: Alta volatilidad, extremar precaución con las oscilaciones.
+    4. VIX 30+: Volatilidad muy alta, mucho miedo en el mercado.
+
     REGLAS DE RESPUESTA OBLIGATORIAS:
     1. NO respondas con mensajes vacíos o saludos genéricos.
     2. DEBES incluir obligatoriamente las siguientes secciones en el análisis:
-       **1. Estado Actual y Régimen del Mercado**
+       **1. Estado Actual y Régimen del Mercado** (incluyendo el diagnóstico explícito del VIX)
        **2. Puntos Clave de Inflexión y Niveles Operativos**
        **3. Análisis de Flujo y Griegas (DEX, VEX, CHEX, VANNA, Net Drift)**
        **4. Escenarios Operativos Cuantitativos (DETALLAR DE MANERA OBLIGATORIA CON PRECIOS EXACTOS):**
@@ -1302,7 +1359,7 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
     3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$). Usa fuentes y letras normales en USD.
     """
 
-    prompt_final = mensaje_usuario or f"Entrega un informe cuantitativo completo de opciones para {tipo_analisis} con los datos del mercado actual, incluyendo explícitamente los Escenarios A, B y C con precios numéricos exactos."
+    prompt_final = mensaje_usuario or f"Entrega un informe cuantitativo completo de opciones para {tipo_analisis} con los datos del mercado actual, incluyendo el diagnóstico del VIX y explícitamente los Escenarios A, B y C con precios numéricos exactos."
 
     if GROQ_API_KEY:
         try:
@@ -1328,7 +1385,7 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
         call_gex_sum, put_gex_sum, total_gex,
         cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
         iv_str, iv_rank_str, net_dex_val, net_tex_val, net_vex_val,
-        net_chex_val, net_vanna_val, last_net_drift
+        net_chex_val, net_vanna_val, last_net_drift, vix_val
     )
 
 # --- WIDGET CHATBOT SIDEBAR ---
@@ -1347,14 +1404,14 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
                     pass
             st.rerun()
 
-    st.caption("Diagnóstico en vivo del mercado según perfiles GEX, Griegas y Escenarios A, B y C")
+    st.caption("Diagnóstico en vivo del mercado según VIX, perfiles GEX, Griegas y Escenarios A, B y C")
 
     col_btn1, col_btn2, col_btn3 = st.columns(3)
     if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
         with st.spinner("Analizando pre-market..."):
             res = consultar_ia(
                 tipo_analisis="Pre-Market",
-                mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando régimen de Gamma, niveles clave, Griegas y Escenarios A, B y C."
+                mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando VIX, régimen de Gamma, niveles clave, Griegas y Escenarios A, B y C."
             )
             save_chat_message("assistant", res)
 
@@ -1362,7 +1419,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
         with st.spinner("Analizando intradía..."):
             res = consultar_ia(
                 tipo_analisis="Mercado Intradía",
-                mensaje_usuario="Genera el informe intradía evaluando flujo de Gamma, decaimiento por Charm/Vanna, Net Drift y Escenarios A, B y C."
+                mensaje_usuario="Genera el informe intradía evaluando lectura de VIX, flujo de Gamma, decaimiento por Charm/Vanna, Net Drift y Escenarios A, B y C."
             )
             save_chat_message("assistant", res)
 
@@ -1370,7 +1427,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
         with st.spinner("Procesando análisis completo..."):
             res = consultar_ia(
                 tipo_analisis="Análisis Estratégico",
-                mensaje_usuario="Proporciona el Diagnóstico Estratégico completo con niveles exactos y Escenarios A, B y C de trading."
+                mensaje_usuario="Proporciona el Diagnóstico Estratégico completo con niveles exactos, VIX y Escenarios A, B y C de trading."
             )
             save_chat_message("assistant", res)
 
@@ -1380,7 +1437,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    if chat_input := st.chat_input("Pregunta sobre GEX, Griegas o niveles de mercado..."):
+    if chat_input := st.chat_input("Pregunta sobre VIX, GEX, Griegas o niveles de mercado..."):
         save_chat_message("user", chat_input)
         with st.chat_message("user"):
             st.write(chat_input)
@@ -1397,7 +1454,7 @@ pw_diff = ((pw1 - spot_price) / spot_price * 100) if spot_price > 0 else 0
 zg_diff = ((zero_gamma - spot_price) / spot_price * 100) if spot_price > 0 else 0
 gex_ratio = abs(call_gex_sum/put_gex_sum) if put_gex_sum != 0 else 0.0
 
-k1, k2, k3, k4, k5, k6, k7, k8 = st.columns(8)
+k1, k2, k3, k4, k5, k6, k7, k8, k9 = st.columns(9)
 k1.markdown(f'<div class="metric-card"><div class="metric-label">Spot Price</div><div class="metric-value">${spot_price:.2f}</div><div class="metric-sub">{ticker_symbol}</div></div>', unsafe_allow_html=True)
 k2.markdown(f'<div class="metric-card"><div class="metric-label">Net GEX</div><div class="metric-value" style="color:{"#10B981" if net_gex_total >= 0 else "#EF4444"};">{fmt_val(net_gex_total)}</div><div class="metric-sub">Ratio: {gex_ratio:.2f}</div></div>', unsafe_allow_html=True)
 k3.markdown(f'<div class="metric-card"><div class="metric-label">Call GEX</div><div class="metric-value" style="color:#10B981">{fmt_val(call_gex_sum)}</div><div class="metric-sub">{call_oi_sum:,} OI</div></div>', unsafe_allow_html=True)
@@ -1406,6 +1463,7 @@ k5.markdown(f'<div class="metric-card"><div class="metric-label">Total GEX</div>
 k6.markdown(f'<div class="metric-card"><div class="metric-label">Call Wall</div><div class="metric-value" style="color:#10B981">${cw1:.0f}</div><div class="metric-sub">{cw_diff:+.2f}%</div></div>', unsafe_allow_html=True)
 k7.markdown(f'<div class="metric-card"><div class="metric-label">Put Wall</div><div class="metric-value" style="color:#EF4444">${pw1:.0f}</div><div class="metric-sub">{pw_diff:+.2f}%</div></div>', unsafe_allow_html=True)
 k8.markdown(f'<div class="metric-card"><div class="metric-label">Zero Gamma</div><div class="metric-value" style="color:#F59E0B">${zero_gamma:.2f}</div><div class="metric-sub">{zg_diff:+.2f}%</div></div>', unsafe_allow_html=True)
+k9.markdown(f'<div class="metric-card"><div class="metric-label">VIX</div><div class="metric-value" style="color:{vix_color}">{vix_val:.2f}</div><div class="metric-sub">{vix_status}</div></div>', unsafe_allow_html=True)
 
 st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
@@ -1773,12 +1831,12 @@ with tab_greeks:
                 fig_chex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Call vs Put Charm Exposure (CHEX) por Strike</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
                 st.plotly_chart(fig_chex, use_container_width=True)
 
-        # 5. VANNA
+        # 5. VANNA (VANNA EX)
         with sub_grk5:
             if not df_grk_sub.empty and 'net_vanna' in df_grk_sub.columns:
                 fig_net_vanna = go.Figure()
                 colors_net_vanna = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vanna']]
-                fig_net_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_vanna'], marker_color=colors_net_vanna, name="Net VANNA"))
+                fig_net_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_vanna'], marker_color=colors_net_vanna, name="Net Vanna"))
                 if spot_price > 0: fig_net_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
                 fig_net_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Vanna Exposure Profile por Strike (M USD)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
                 st.plotly_chart(fig_net_vanna, use_container_width=True)
@@ -1786,8 +1844,8 @@ with tab_greeks:
                 st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
                 fig_vanna = go.Figure()
-                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vanna'], name="Call VANNA (+)", marker_color='#C084FC'))
-                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vanna'], name="Put VANNA (-)", marker_color='#581C87'))
+                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_vanna'], name="Call Vanna (+)", marker_color='#C084FC'))
+                fig_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_vanna'], name="Put Vanna (-)", marker_color='#581C87'))
                 if spot_price > 0: fig_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
                 fig_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Call vs Put Vanna Exposure por Strike</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
                 st.plotly_chart(fig_vanna, use_container_width=True)
@@ -1797,86 +1855,26 @@ with tab_greeks:
 # --- 5. BACKGAMMA ---
 with tab_back:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📜 HISTÓRICO DE GAMMA (BACKGAMMA)</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📜 HISTÓRICO Y BACKTEST DE SNAPSHOTS DE GAMMA</h3>", unsafe_allow_html=True)
     
-    if jsonbin_history_data:
-        avail_dates = sorted(list(jsonbin_history_data.keys()), reverse=True)
-        sel_date = st.selectbox("SELECCIONAR FECHA DE HISTORIAL", avail_dates)
-        
-        snaps = jsonbin_history_data.get(sel_date, [])
-        if snaps:
-            hist_times = [s.get("time") for s in snaps]
-            hist_spots = [s.get("spot") for s in snaps]
-            hist_gex = [s.get("net_gex") for s in snaps]
-            
-            fig_hist = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_hist.add_trace(go.Scatter(x=hist_times, y=hist_gex, name="Net GEX Histórico", line=dict(color="#10B981" if (hist_gex[-1] if hist_gex else 0)>=0 else "#EF4444", width=2)), secondary_y=False)
-            fig_hist.add_trace(go.Scatter(x=hist_times, y=hist_spots, name="Spot Price", line=dict(color="#3B82F6", width=2)), secondary_y=True)
-            
-            fig_hist.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title=f"<b>Evolución Intradía de Gamma - {sel_date}</b>", height=480)
-            st.plotly_chart(fig_hist, use_container_width=True)
+    if supabase:
+        st.markdown("<p style='font-family:\"JetBrains Mono\"; font-size:0.8rem; color:#8B949E;'>Visualización de snapshots almacenados en Supabase Realtime.</p>", unsafe_allow_html=True)
+        hist_data = fetch_supabase_gex_history(ticker_symbol, limit=100)
+        if hist_data:
+            df_hist = pd.DataFrame(hist_data)
+            st.dataframe(df_hist, use_container_width=True)
         else:
-            st.info("No hay registros detallados para la fecha seleccionada.")
+            st.info("No se encontraron registros históricos recientes en la base de datos.")
     else:
-        st.info("No hay datos históricos disponibles en JsonBin/Supabase.")
+        st.info("Conexión con Supabase no configurada para historial.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 6. DATA & DIAGNÓSTICO DE MERCADO IA ---
+# --- 6. DATA ---
 with tab_data:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📊 DATA SUMMARY & DIAGNÓSTICO IA DE MERCADO</h3>", unsafe_allow_html=True)
-    
-    st.markdown("<div class='data-summary-box'>", unsafe_allow_html=True)
-    st.markdown("<h4 style='color:#60A5FA; margin-top:0; font-family:\"JetBrains Mono\"; font-weight:800;'>Data Summary (Resumen Operativo del Mercado)</h4>", unsafe_allow_html=True)
-    
-    d_col1, d_col2, d_col3 = st.columns(3)
-    with d_col1:
-        st.markdown(f"**Ticker**: `{ticker_symbol}`")
-        st.markdown(f"**Spot Price**: `${spot_price:.2f}` USD")
-        st.markdown(f"**Régimen**: `{regime_str}`")
-    with d_col2:
-        st.markdown(f"**Zero Gamma Level**: `${zero_gamma:.2f}` USD")
-        st.markdown(f"**Call Wall (CW1)**: `${cw1:.0f}` USD")
-        st.markdown(f"**Put Wall (PW1)**: `${pw1:.0f}` USD")
-    with d_col3:
-        st.markdown(f"**Net GEX Total**: `{fmt_val(net_gex_total)}`")
-        st.markdown(f"**IV ATM**: `{iv_str}` (Rank: `{iv_rank_str}`)")
-        st.markdown(f"**Net Drift**: `{fmt_val(last_net_drift)}`")
-    
-    st.markdown("---")
-    
-    if st.button("🤖 GENERAR DIAGNÓSTICO DE MERCADO (IA)", key="btn_generate_diag_data", use_container_width=True):
-        with st.spinner("Procesando análisis de profundidad con escenarios cuantificados (A, B y C)..."):
-            diag_res = consultar_ia(
-                tipo_analisis="Data Summary - Diagnóstico Profundo de Mercado",
-                mensaje_usuario="Genera el diagnóstico profundo de mercado especificando exactamente los Escenarios A, B y C con precios numéricos de entrada, objetivos y reversión."
-            )
-            st.session_state["data_diag_result"] = diag_res
-            save_chat_message("assistant", diag_res)
-
-    if "data_diag_result" in st.session_state and st.session_state["data_diag_result"]:
-        st.markdown("<div style='margin-top:20px; padding:18px; background:rgba(14, 19, 31, 0.95); border:1px solid rgba(59,130,246,0.4); border-radius:10px;'>", unsafe_allow_html=True)
-        st.markdown(st.session_state["data_diag_result"])
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("<h4 style='color:#F0F6FC; margin-top:20px; font-family:\"JetBrains Mono\";'>Tabla de Exposición de Opciones por Strike</h4>", unsafe_allow_html=True)
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem;'>📋 TABLA DESGLOSADA DE OPCIONES Y GRIEGAS POR STRIKE</h3>", unsafe_allow_html=True)
     if not df_curr.empty:
-        df_show = df_curr[['strike', 'openInterest_c', 'openInterest_p', 'call_gex', 'put_gex', 'net_gex', 'net_dex', 'net_chex', 'net_vanna']].copy()
-        df_show.columns = ['Strike', 'OI Calls', 'OI Puts', 'Call GEX ($)', 'Put GEX ($)', 'Net GEX ($)', 'Net DEX ($M)', 'Net CHEX ($M/d)', 'Net Vanna ($M)']
-        st.dataframe(df_show.style.format({
-            'Strike': '{:.2f}',
-            'OI Calls': '{:,.0f}',
-            'OI Puts': '{:,.0f}',
-            'Call GEX ($)': lambda x: fmt_val(x),
-            'Put GEX ($)': lambda x: fmt_val(x),
-            'Net GEX ($)': lambda x: fmt_val(x),
-            'Net DEX ($M)': '{:+.2f}',
-            'Net CHEX ($M/d)': '{:+.2f}',
-            'Net Vanna ($M)': '{:+.2f}'
-        }), use_container_width=True, height=400)
+        st.dataframe(df_curr.style.highlight_max(axis=0, color='rgba(16,185,129,0.2)'), use_container_width=True)
     else:
-        st.info("No hay datos de tabla disponibles.")
-        
+        st.warning("No hay datos de opciones disponibles para la tabla.")
     st.markdown('</div>', unsafe_allow_html=True)
