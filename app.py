@@ -56,7 +56,7 @@ def get_supabase_client():
     if SUPABASE_URL and SUPABASE_KEY and SUPABASE_URL.startswith("http") and len(SUPABASE_KEY) > 20:
         try:
             return create_client(SUPABASE_URL, SUPABASE_KEY)
-        except Exception as e:
+        except Exception:
             return None
     return None
 
@@ -606,7 +606,7 @@ def fetch_option_chain_schwab(symbol, strikes_count):
             contract_type=contract_type,
             strike_count=strikes_count,
             from_date=today,
-            to_date=today + timedelta(days=90) # Extendido a 90 días DTE
+            to_date=today + timedelta(days=90)
         )
         if resp.status_code == 200:
             return resp.json()
@@ -1438,7 +1438,7 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None, select
           * **Escenario A (Continuación / Retesteo Aceptado)**: Detalla el comportamiento si el precio rompe y sostiene un nivel clave (CW1={m['cw1']:.0f} o PW1={m['pw1']:.0f}), especificando los precios exactos de entrada y objetivo.
           * **Escenario B (Rechazo en Nivel Clave)**: Detalla qué ocurre al rebotar o ser rechazado en la resistencia/soporte principal (CW1 o PW1), con sus precios reales de entrada y objetivos hacia Zero Gamma ({m['zg']:.2f}).
           * **Escenario C (Trampa / Falsa Ruptura)**: Detalla la maniobra de barrido de liquidez (falsa ruptura por encima de CW1 o debajo de PW1) y el precio numérico de reversión esperado.
-    3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$). Usa fuentes y letras normales en USD.
+    3. NUNCA uses notación LaTeX ni símbolos de dólar dobles. Usa fuentes y letras normales en USD.
     """
 
     prompt_final = mensaje_usuario or f"Entrega un informe cuantitativo completo de opciones para {tipo_analisis} con los datos del mercado actual, incluyendo el diagnóstico del VIX y explícitamente los Escenarios A, B y C con precios numéricos exactos."
@@ -1676,7 +1676,7 @@ with tab_gex:
     df_gex_filtered = df_curr.copy()
     
     if not df_curr.empty and 'exp_key' in df_curr.columns:
-        col_dte_box, _ = st.columns([1, 3])  # Restringe el ancho a exactamente 1/4 del contenedor
+        col_dte_box, _ = st.columns([1, 3])
         with col_dte_box:
             with st.expander("📂 DTE", expanded=False):
                 exp_groups = []
@@ -1691,7 +1691,6 @@ with tab_gex:
                     except Exception:
                         formatted_date = d_str
                     
-                    # Indicador de color: Verde (🟢) para positivo, Rojo (🔴) para negativo
                     color_icon = "🟢" if net_gex_v >= 0 else "🔴"
                     formatted_val = fmt_val(net_gex_v)
                     
@@ -1848,341 +1847,218 @@ with tab_live:
         if min_strike <= pw1 <= max_strike: raw_levels.append(('Put Wall 1', pw1, '#EF4444', 'solid'))
         if min_strike <= pw2 <= max_strike: raw_levels.append(('Put Wall 2', pw2, '#EF4444', 'dash'))
         if min_strike <= pw3 <= max_strike: raw_levels.append(('Put Wall 3', pw3, '#EF4444', 'dot'))
-        if min_strike <= zero_gamma <= max_strike: raw_levels.append(('Flip Level', zero_gamma, '#3B82F6', 'dot'))
+        if min_strike <= zero_gamma <= max_strike:
+            raw_levels.append(('Zero Gamma', zero_gamma, '#F59E0B', 'dash'))
 
-        grouped_levels = {}
-        for label, val, color, dash in raw_levels:
-            key = round(val, 1)
-            if key not in grouped_levels: grouped_levels[key] = []
-            grouped_levels[key].append((label, color, dash))
-
-        for k_val, items in grouped_levels.items():
-            for label, color, dash in items:
-                fig_live.add_hline(y=k_val, line_color=color, line_width=0.8, line_dash=dash, layer="above")
-            labels_str = " / ".join([item[0] for item in items])
-            badge_text = f"<b>{labels_str}</b> (${k_val:.0f})"
-            main_color = items[0][1]
-            fig_live.add_annotation(
-                x=0.988, xref="paper", y=k_val, yref="y", text=badge_text, showarrow=False,
-                xanchor="right", yanchor="middle", font=dict(family="JetBrains Mono", size=10, color=main_color),
-                bgcolor="#090D16", bordercolor=main_color, borderwidth=1, borderpad=3, opacity=0.95
+        for name, val, color, dash in raw_levels:
+            fig_live.add_hline(
+                y=val, line_color=color, line_width=1.5, line_dash=dash,
+                annotation_text=f"{name} (${val:.2f})", annotation_position="right",
+                annotation_font=dict(color=color, size=10, family="JetBrains Mono")
             )
 
-        if not h_1m_reindexed.empty:
-            fig_live.add_trace(go.Candlestick(
-                x=full_timestamps, open=h_1m_reindexed['Open'], high=h_1m_reindexed['High'],
-                low=h_1m_reindexed['Low'], close=h_1m_reindexed['Close'], name="Spot Price",
-                increasing_line_color='#10B981', decreasing_line_color='#EF4444',
-                increasing_fillcolor='#10B981', decreasing_fillcolor='#EF4444'
+        if len(full_spots) > 0 and len(full_timestamps) == len(full_spots):
+            fig_live.add_trace(go.Scatter(
+                x=full_timestamps, y=full_spots, mode='lines',
+                line=dict(color='#FFFFFF', width=2),
+                name='Spot Price',
+                hovertemplate="<b>Hora:</b> %{x}<br><b>Spot:</b> $%{y:.2f}<extra></extra>"
             ))
 
         fig_live.update_layout(
             template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-            uirevision="static_user_state", xaxis_title=f"Hora Intradía ({tz_choice.split(' ')[0]})", yaxis_title="Precio / Strike ($)",
-            height=680, dragmode='pan', hovermode="closest", xaxis_rangeslider_visible=False,
-            margin=dict(l=80, r=60, t=40, b=40), yaxis=dict(side='right')
+            xaxis=dict(title="Hora Intradía", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono")),
+            yaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono"), range=[min_strike, max_strike]),
+            height=650, margin=dict(l=40, r=60, t=30, b=40)
         )
-        st.plotly_chart(fig_live, use_container_width=True, config={'scrollZoom': True}, key="heatmap_live")
-
+        st.plotly_chart(fig_live, use_container_width=True)
+    else:
+        st.info("No hay suficientes datos de mapa de calor Gamma Intradía.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 3. NET DRIFT ---
 with tab_drift:
-    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    if len(full_timestamps) > 0 and len(call_drift_raw) > 0:
-        last_call_val, last_put_val, last_net_val = call_drift_raw[-1], put_drift_raw[-1], net_drift_raw[-1]
-        last_spot_val = closes_drift[-1] if len(closes_drift) > 0 else spot_price
-
-        st.markdown(f"""
-            <div style='text-align: center; margin-bottom: 12px;'>
-                <h3 style='margin: 0; font-family: "Plus Jakarta Sans"; font-weight: 800; color: #F0F6FC; font-size: 1.15rem;'>
-                    Net Drift (Premium) - {ticker_symbol}
-                </h3>
-                <div style='font-family: "JetBrains Mono"; font-size: 0.82rem; margin-top: 6px; display: flex; justify-content: center; gap: 18px; flex-wrap: wrap;'>
-                    <span style='color: #10B981;'>● Calls ({fmt_val(last_call_val)})</span>
-                    <span style='color: #EF4444;'>● Puts ({fmt_val(last_put_val)})</span>
-                    <span style='color: #F59E0B;'>● Net ({fmt_val(last_net_val)})</span>
-                    <span style='color: #3B82F6;'>● {ticker_symbol} (${last_spot_val:.2f})</span>
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
-
-        fig_drift = make_subplots(
-            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.06,
-            row_heights=[0.75, 0.25], specs=[[{"secondary_y": False}], [{"secondary_y": False}]]
-        )
-
-        # Escala el movimiento del Spot Price al rango numérico del Drift para compartir 1 solo eje Y
-        drift_max = max(abs(call_drift_raw).max(), abs(put_drift_raw).max(), abs(net_drift_raw).max(), 1.0)
-        spot_change = closes_drift - closes_drift[0]
-        spot_max_change = max(abs(spot_change).max(), 0.001)
-        spot_scaled = (spot_change / spot_max_change) * drift_max
-
+    st.markdown("<h3 style='margin-top:0; font-weight:700; color:#F0F6FC; font-size:1.1rem;'>📈 Net Cumulative Premium Drift</h3>", unsafe_allow_html=True)
+    if len(full_timestamps) > 0:
+        fig_drift = go.Figure()
         fig_drift.add_trace(go.Scatter(
-            x=full_timestamps, y=call_drift_raw, mode='lines', name='Calls',
+            x=full_timestamps, y=call_drift_raw, mode='lines', name='Call Drift',
             line=dict(color='#10B981', width=2),
-            hovertemplate="<b>Hora:</b> %{x}<br><b>Calls:</b> %{customdata}<extra></extra>",
+            hovertemplate="<b>Hora:</b> %{x}<br><b>Call Drift:</b> %{customdata}<extra></extra>",
             customdata=[fmt_val(v) for v in call_drift_raw]
-        ), row=1, col=1)
-
+        ))
         fig_drift.add_trace(go.Scatter(
-            x=full_timestamps, y=put_drift_raw, mode='lines', name='Puts',
+            x=full_timestamps, y=put_drift_raw, mode='lines', name='Put Drift',
             line=dict(color='#EF4444', width=2),
-            hovertemplate="<b>Hora:</b> %{x}<br><b>Puts:</b> %{customdata}<extra></extra>",
+            hovertemplate="<b>Hora:</b> %{x}<br><b>Put Drift:</b> %{customdata}<extra></extra>",
             customdata=[fmt_val(v) for v in put_drift_raw]
-        ), row=1, col=1)
-
+        ))
         fig_drift.add_trace(go.Scatter(
-            x=full_timestamps, y=net_drift_raw, mode='lines', name='Net',
-            line=dict(color='#F59E0B', width=2),
+            x=full_timestamps, y=net_drift_raw, mode='lines', name='Net Drift',
+            line=dict(color='#3B82F6', width=2.5),
             hovertemplate="<b>Hora:</b> %{x}<br><b>Net Drift:</b> %{customdata}<extra></extra>",
             customdata=[fmt_val(v) for v in net_drift_raw]
-        ), row=1, col=1)
-
-        fig_drift.add_trace(go.Scatter(
-            x=full_timestamps, y=spot_scaled, mode='lines', name=ticker_symbol,
-            line=dict(color='#3B82F6', width=2),
-            hovertemplate=f"<b>Hora:</b> %{{x}}<br><b>{ticker_symbol}:</b> $%{{customdata:.2f}}<extra></extra>",
-            customdata=closes_drift
-        ), row=1, col=1)
-
-        fig_drift.add_trace(go.Scatter(
-            x=full_timestamps, y=vols_drift, mode='lines', name='Volume',
-            line=dict(color='#10B981', width=1.5), fill='tozeroy',
-            fillcolor='rgba(16, 185, 129, 0.25)'
-        ), row=2, col=1)
-
-        fig_drift.update_xaxes(showgrid=True, gridcolor="rgba(255,255,255,0.05)")
-        fig_drift.update_yaxes(fixedrange=False, autorange=True, showgrid=True, gridcolor="rgba(255,255,255,0.05)", row=1, col=1)
-        fig_drift.update_yaxes(fixedrange=False, autorange=True, showgrid=True, gridcolor="rgba(255,255,255,0.05)", row=2, col=1)
-
+        ))
         fig_drift.update_layout(
             template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
-            showlegend=False, height=650, margin=dict(l=60, r=60, t=30, b=30),
-            hovermode="x unified", dragmode='pan', uirevision="static_user_state"
+            xaxis=dict(title="Hora Intradía", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono")),
+            yaxis=dict(title="Drift Acumulado ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono")),
+            height=560, margin=dict(l=50, r=40, t=30, b=40),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        st.plotly_chart(fig_drift, use_container_width=True, config={'scrollZoom': True}, key="net_drift_chart")
-
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.plotly_chart(fig_drift, use_container_width=True)
+    else:
+        st.info("No hay datos de drift intradía disponibles.")
 
 # --- 4. GREEKS ---
 with tab_greeks:
-    df_greeks_filtered = df_curr.copy()
-    if 'selected_dte_keys' in st.session_state and st.session_state.selected_dte_keys:
-        df_greeks_filtered = df_curr[df_curr['exp_key'].isin(st.session_state.selected_dte_keys)]
-        df_greeks_filtered = df_greeks_filtered.groupby('strike', as_index=False).agg({
-            'net_dex': 'sum', 'call_dex': 'sum', 'put_dex': 'sum',
-            'net_tex': 'sum', 'call_tex': 'sum', 'put_tex': 'sum',
-            'net_vex': 'sum', 'call_vex': 'sum', 'put_vex': 'sum',
-            'net_chex': 'sum', 'call_chex': 'sum', 'put_chex': 'sum',
-            'net_vanna': 'sum', 'call_vanna': 'sum', 'put_vanna': 'sum'
-        })
+    st.markdown("<h3 style='margin-top:0; font-weight:700; color:#F0F6FC; font-size:1.1rem;'>📊 Exposición de Griegas Institucionales</h3>", unsafe_allow_html=True)
+    
+    # Definición segura de colores para evitar NameError
+    c_dex = "#10B981" if net_dex_total >= 0 else "#EF4444"
+    c_tex = "#10B981" if net_tex_total >= 0 else "#EF4444"
+    c_vex = "#10B981" if net_vex_total >= 0 else "#EF4444"
+    c_chex = "#10B981" if net_chex_total >= 0 else "#EF4444"
+    c_vanna = "#10B981" if net_vanna_total >= 0 else "#EF4444"
 
     g1, g2, g3, g4, g5 = st.columns(5)
-    c_tex = "#10B981" if net_tex_total >= 0 else "#EF4444"
-    c_dex = "#10B981" if net_dex_total >= 0 else "#EF4444"
-    g1.markdown(f'<div class="metric-card"><div class="metric-label">Net Delta (DEX)</div><div class="metric-value" style="color:{c_dex};">${net_dex_total:.2f}M</div><div class="metric-sub">Delta Exposure</div></div>', unsafe_allow_html=True)
-    g2.markdown(
-    f'<div class="metric-card">'
-    f'<div class="metric-label">Net Theta (TEX)</div>'
-    f'<div class="metric-value" style="color:{c_tex};">{fmt_val(net_tex_total)}</div>'
-    f'<div class="metric-sub">Decaimiento / Día</div>'
-    f'</div>', 
-    unsafe_allow_html=True
-)
-    g2.markdown(f'<div class="metric-card"><div class="metric-label">Net Theta (TEX)</div><div class="metric-value" style="color:{c_tex};">{fmt_val(net_tex_total)}</div><div class="metric-sub">Decaimiento / Día</div></div>', unsafe_allow_html=True)
+    g1.markdown(f'<div class="metric-card"><div class="metric-label">Net Delta (DEX)</div><div class="metric-value" style="color:{c_dex};">{net_dex_total:.2f}M</div><div class="metric-sub">USD Nominal</div></div>', unsafe_allow_html=True)
+    g2.markdown(f'<div class="metric-card"><div class="metric-label">Net Theta (TEX)</div><div class="metric-value" style="color:{c_tex};">${net_tex_total:,.0f}</div><div class="metric-sub">USD / Día</div></div>', unsafe_allow_html=True)
     g3.markdown(f'<div class="metric-card"><div class="metric-label">Net Vega (VEX)</div><div class="metric-value" style="color:{c_vex};">{fmt_val(net_vex_total)}</div><div class="metric-sub">Por +1% IV</div></div>', unsafe_allow_html=True)
-    g4.markdown(f'<div class="metric-card"><div class="metric-label">Net Charm (CHEX)</div><div class="metric-value" style="color:{c_chex};">${net_chex_total:.2f}M</div><div class="metric-sub">Decaimiento Delta / Día</div></div>', unsafe_allow_html=True)
-    g5.markdown(f'<div class="metric-card"><div class="metric-label">Net Vanna (VANNA)</div><div class="metric-value" style="color:{c_vanna};">${net_vanna_total:.2f}M</div><div class="metric-sub">Sensibilidad a Vol</div></div>', unsafe_allow_html=True)
+    g4.markdown(f'<div class="metric-card"><div class="metric-label">Net Charm (CHEX)</div><div class="metric-value" style="color:{c_chex};">{net_chex_total:.2f}M</div><div class="metric-sub">USD / Día</div></div>', unsafe_allow_html=True)
+    g5.markdown(f'<div class="metric-card"><div class="metric-label">Net Vanna (VANNA)</div><div class="metric-value" style="color:{c_vanna};">{net_vanna_total:.2f}M</div><div class="metric-sub">USD / 1% IV</div></div>', unsafe_allow_html=True)
 
-    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
 
-    sub_grk1, sub_grk2, sub_grk3, sub_grk4, sub_grk5 = st.tabs([
-        "DELTA (DEX)", "THETA (TEX)", "VEGA (VEX)", "CHARM (CHEX)", "VANNA (VANNA EX)"
-    ])
-
-    if not df_curr.empty and 'strike' in df_curr.columns:
-        df_grk_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
-        xaxis_kwargs_grk = safe_strike_range(df_grk_sub)
-
-        # 1. DELTA (DEX)
-        with sub_grk1:
-            if not df_grk_sub.empty and 'net_dex' in df_grk_sub.columns:
-                fig_net_dex = go.Figure()
-                colors_net_dex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_dex']]
-                fig_net_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_dex'], marker_color=colors_net_dex, name="Net DEX"))
-                if spot_price > 0: fig_net_dex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_net_dex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Delta Exposure (DEX) Profile por Strike (M USD)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
-                st.plotly_chart(fig_net_dex, use_container_width=True)
-
-                st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-
+    sub_grk1, sub_grk2, sub_grk3 = st.tabs(["DEX por Strike", "CHARM por Strike", "VANNA por Strike"])
+    
+    with sub_grk1:
+        if not df_curr.empty and 'net_dex' in df_curr.columns:
+            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            if not df_sub.empty:
+                xaxis_kwargs = safe_strike_range(df_sub)
+                colors = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub['net_dex']]
                 fig_dex = go.Figure()
-                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['call_dex'], name="Call DEX (+)", marker_color='#38BDF8'))
-                fig_dex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['put_dex'], name="Put DEX (-)", marker_color='#1E40AF'))
-                if spot_price > 0: fig_dex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_dex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Call vs Put Delta Exposure (DEX) por Strike (M USD)</b>", barmode='relative', xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
+                fig_dex.add_trace(go.Bar(
+                    x=df_sub['strike'], y=df_sub['net_dex'], marker_color=colors,
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net DEX:</b> %{y:.2f}M<extra></extra>"
+                ))
+                if spot_price > 0:
+                    fig_dex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_dex.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="<b>Delta Exposure (DEX) por Strike (M USD)</b>",
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono"), **xaxis_kwargs),
+                    yaxis=dict(title="Net DEX ($M)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono")),
+                    height=500, margin=dict(l=50, r=40, t=50, b=40)
+                )
                 st.plotly_chart(fig_dex, use_container_width=True)
 
-        # 2. THETA (TEX)
-        with sub_grk2:
-            if not df_grk_sub.empty and 'net_tex' in df_grk_sub.columns:
-                fig_net_tex = go.Figure()
-                colors_net_tex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_tex']]
-                fig_net_tex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_tex'], marker_color=colors_net_tex, name="Net TEX"))
-                if spot_price > 0: fig_net_tex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_net_tex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Theta Exposure (TEX) Profile por Strike ($/día)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
-                st.plotly_chart(fig_net_tex, use_container_width=True)
+    with sub_grk2:
+        if not df_curr.empty and 'net_chex' in df_curr.columns:
+            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            if not df_sub.empty:
+                xaxis_kwargs = safe_strike_range(df_sub)
+                colors = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub['net_chex']]
+                fig_chex = go.Figure()
+                fig_chex.add_trace(go.Bar(
+                    x=df_sub['strike'], y=df_sub['net_chex'], marker_color=colors,
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net CHEX:</b> %{y:.2f}M<extra></extra>"
+                ))
+                if spot_price > 0:
+                    fig_chex.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_chex.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="<b>Charm Exposure (CHEX) por Strike (M USD/Día)</b>",
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono"), **xaxis_kwargs),
+                    yaxis=dict(title="Net CHEX ($M)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono")),
+                    height=500, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig_chex, use_container_width=True)
 
-        # 3. VEGA (VEX)
-        with sub_grk3:
-            if not df_grk_sub.empty and 'net_vex' in df_grk_sub.columns:
-                fig_net_vex = go.Figure()
-                colors_net_vex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vex']]
-                fig_net_vex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_vex'], marker_color=colors_net_vex, name="Net VEX"))
-                if spot_price > 0: fig_net_vex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_net_vex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Vega Exposure (VEX) Profile por Strike ($/1% IV)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
-                st.plotly_chart(fig_net_vex, use_container_width=True)
-
-        # 4. CHARM (CHEX)
-        with sub_grk4:
-            if not df_grk_sub.empty and 'net_chex' in df_grk_sub.columns:
-                fig_net_chex = go.Figure()
-                colors_net_chex = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_chex']]
-                fig_net_chex.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_chex'], marker_color=colors_net_chex, name="Net CHEX"))
-                if spot_price > 0: fig_net_chex.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_net_chex.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Charm Exposure (CHEX) Profile por Strike (M USD/día)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
-                st.plotly_chart(fig_net_chex, use_container_width=True)
-
-        # 5. VANNA (VANNA)
-        with sub_grk5:
-            if not df_grk_sub.empty and 'net_vanna' in df_grk_sub.columns:
-                fig_net_vanna = go.Figure()
-                colors_net_vanna = ['#10B981' if v >= 0 else '#EF4444' for v in df_grk_sub['net_vanna']]
-                fig_net_vanna.add_trace(go.Bar(x=df_grk_sub['strike'], y=df_grk_sub['net_vanna'], marker_color=colors_net_vanna, name="Net Vanna"))
-                if spot_price > 0: fig_net_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
-                fig_net_vanna.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', title="<b>Net Vanna Exposure Profile por Strike (M USD)</b>", xaxis=dict(title="Strike ($)", **xaxis_kwargs_grk), height=400)
-                st.plotly_chart(fig_net_vanna, use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    with sub_grk3:
+        if not df_curr.empty and 'net_vanna' in df_curr.columns:
+            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+            if not df_sub.empty:
+                xaxis_kwargs = safe_strike_range(df_sub)
+                colors = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub['net_vanna']]
+                fig_vanna = go.Figure()
+                fig_vanna.add_trace(go.Bar(
+                    x=df_sub['strike'], y=df_sub['net_vanna'], marker_color=colors,
+                    hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Net Vanna:</b> %{y:.2f}M<extra></extra>"
+                ))
+                if spot_price > 0:
+                    fig_vanna.add_vline(x=spot_price, line_color="#3B82F6", line_width=1.5, line_dash="dash", annotation_text=f"Spot (${spot_price:.2f})")
+                fig_vanna.update_layout(
+                    template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                    title="<b>Vanna Exposure por Strike (M USD / 1% IV)</b>",
+                    xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono"), **xaxis_kwargs),
+                    yaxis=dict(title="Net Vanna ($M)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono")),
+                    height=500, margin=dict(l=50, r=40, t=50, b=40)
+                )
+                st.plotly_chart(fig_vanna, use_container_width=True)
 
 # --- 5. BACKGAMMA ---
 with tab_back:
-    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📜 BACKGAMMA - HISTÓRICO DE CAPTURAS</h3>", unsafe_allow_html=True)
-    
+    st.markdown("<h3 style='margin-top:0; font-weight:700; color:#F0F6FC; font-size:1.1rem;'>📜 Histórico de Snapshots Gamma (Backgamma)</h3>", unsafe_allow_html=True)
     if jsonbin_history_data:
-        dates_avail = sorted(list(jsonbin_history_data.keys()), reverse=True)
-        sel_date = st.selectbox("Seleccionar Fecha de Historial:", dates_avail)
-        
+        dates_available = sorted(list(jsonbin_history_data.keys()), reverse=True)
+        sel_date = st.selectbox("Selecciona Fecha de Snapshot:", options=dates_available, key="sb_backgamma_date")
         day_snaps = jsonbin_history_data.get(sel_date, [])
+        
         if day_snaps:
-            times_hist = [s.get("time") for s in day_snaps]
-            spots_hist = [s.get("spot") for s in day_snaps]
-            gex_hist = [s.get("net_gex") for s in day_snaps]
+            df_back = pd.DataFrame(day_snaps)
+            st.markdown(f"**Registros guardados para {sel_date}:** {len(df_back)} snapshots")
             
-            fig_back = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, subplot_titles=(f"Precio Spot ({sel_date})", "Net GEX Intradía"))
-            fig_back.add_trace(go.Scatter(x=times_hist, y=spots_hist, mode='lines+markers', name='Spot', line=dict(color='#3B82F6', width=2)), row=1, col=1)
-            fig_back.add_trace(go.Bar(x=times_hist, y=gex_hist, name='Net GEX', marker_color=['#10B981' if v>=0 else '#EF4444' for v in gex_hist]), row=2, col=1)
-            fig_back.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', height=500, showlegend=False)
+            fig_back = go.Figure()
+            fig_back.add_trace(go.Scatter(
+                x=df_back['time'], y=df_back['spot'], mode='lines+markers', name='Spot Price',
+                line=dict(color='#3B82F6', width=2),
+                hovertemplate="<b>Hora:</b> %{x}<br><b>Spot:</b> $%{y:.2f}<extra></extra>"
+            ))
+            fig_back.update_layout(
+                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                title=f"<b>Evolución del Spot Price ({sel_date})</b>",
+                xaxis=dict(title="Hora", gridcolor="rgba(255,255,255,0.05)"),
+                yaxis=dict(title="Spot ($)", gridcolor="rgba(255,255,255,0.05)"),
+                height=450, margin=dict(l=50, r=40, t=40, b=40)
+            )
             st.plotly_chart(fig_back, use_container_width=True)
         else:
-            st.info("No hay datos para la fecha seleccionada.")
+            st.info("No hay datos almacenados para esta fecha.")
     else:
-        st.info("No hay historial de Backgamma disponible.")
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.info("No hay historial disponible en la nube de JSONBin.")
 
 # --- 6. DATA ---
 with tab_data:
-    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.15rem; letter-spacing:0.5px;'>📋 DATA SUMMARY & DIAGNÓSTICO INSTITUCIONAL</h3>", unsafe_allow_html=True)
-    
-    st.markdown(f"""
-        <div class="data-summary-box">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <h4 style="margin: 0; font-family: 'Plus Jakarta Sans'; font-weight: 700; color: #60A5FA;">⚡ Resumen Ejecutivo de Mercado ({ticker_symbol})</h4>
-                <span style="font-family: 'JetBrains Mono'; font-size: 0.8rem; color: #8B949E;">Índice VIX: <b style="color: {vix_color};">{vix_val:.2f}</b> ({vix_status})</span>
-            </div>
-            <p style="font-family: 'JetBrains Mono'; font-size: 0.82rem; color: #D1D5DB; margin-bottom: 8px;">
-                ● <b>Spot Price:</b> ${spot_price:.2f} USD | <b>Zero Gamma (Flip):</b> ${zero_gamma:.2f} USD | <b>Régimen:</b> <span style="color: {'#10B981' if net_gex_total >= 0 else '#EF4444'};">{regime_str.upper()}</span><br>
-                ● <b>Call Wall Principal (CW1):</b> ${cw1:.0f} USD | <b>Put Wall Principal (PW1):</b> ${pw1:.0f} USD<br>
-                ● <b>Net GEX Total:</b> {fmt_val(net_gex_total)} | <b>Net DEX:</b> ${net_dex_total:.2f}M USD | <b>IV ATM:</b> {iv_str}
-            </p>
-        </div>
-    """, unsafe_allow_html=True)
-
-    # Procesamiento de DTEs disponibles para el selector individual
-    available_dtes_data = []
-    if not df_curr.empty and 'exp_key' in df_curr.columns:
-        for exp_k, group in df_curr.groupby('exp_key'):
-            d_str = group['exp_date'].iloc[0] if 'exp_date' in group.columns else exp_k.split(':')[0]
-            dte_v = int(group['dte'].iloc[0]) if 'dte' in group.columns else 0
-            available_dtes_data.append({'exp_key': exp_k, 'dte': dte_v, 'date': d_str})
-        available_dtes_data = sorted(available_dtes_data, key=lambda x: x['dte'])
-
-    dte_data_opts = [item['exp_key'] for item in available_dtes_data] if available_dtes_data else ["0DTE"]
-    dte_data_labels = {item['exp_key']: f"{item['dte']} DTE ({item['date']})" for item in available_dtes_data} if available_dtes_data else {}
-
-    col_btn_diag, col_dte_diag = st.columns([2.5, 1.5])
-    
-    with col_dte_diag:
-        selected_dte_individual = st.selectbox(
-            "DTE Diagnóstico IA",
-            options=dte_data_opts,
-            format_func=lambda x: dte_data_labels.get(x, x),
-            key="sb_dte_individual_data"
-        )
-
-    with col_btn_diag:
-        btn_gen_diag = st.button("🤖 GENERAR DIAGNÓSTICO DE MERCADO (IA)", key="btn_data_ia_diag", use_container_width=True)
-
-    if btn_gen_diag:
-        with st.spinner("Procesando análisis profundo y generando Escenarios A, B y C..."):
-            prompt_diag = (
-                f"Genera un Diagnóstico de Mercado e informe táctico completo para {ticker_symbol} "
-                f"evaluando el DTE {dte_data_labels.get(selected_dte_individual, selected_dte_individual)}. "
-                f"Incluye un análisis exhaustivo del impacto del VIX en {vix_val:.2f}, "
-                f"el comportamiento esperado según el régimen de Gamma, el desglose de Griegas (DEX, TEX, VEX, CHEX, VANNA) "
-                f"y OBLIGATORIAMENTE los Escenarios A (Continuación / Retesteo Aceptado), B (Rechazo en Nivel Clave) y "
-                f"C (Trampa / Falsa Ruptura - Liquidity Sweep) especificando los precios numéricos exactos de entrada y objetivo."
-            )
-            diag_output = consultar_ia(
-                tipo_analisis="Diagnóstico Data Summary", 
-                mensaje_usuario=prompt_diag,
-                selected_dtes=[selected_dte_individual]
-            )
-            st.session_state["data_ia_diag_result"] = diag_output
-
-    if st.session_state.get("data_ia_diag_result"):
-        st.markdown("<div style='margin-top: 15px; padding: 18px; background: rgba(14, 19, 31, 0.95); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 10px;'>", unsafe_allow_html=True)
-        st.markdown(st.session_state["data_ia_diag_result"])
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("<hr style='border-color:rgba(255,255,255,0.08); margin: 25px 0;'>", unsafe_allow_html=True)
-    st.markdown("<h4 style='font-family:\"Plus Jakarta Sans\"; font-weight:700; color:#F0F6FC;'>📊 Cadena de Opciones y Exposición Cuantitativa por Strike</h4>", unsafe_allow_html=True)
-    
+    st.markdown("<h3 style='margin-top:0; font-weight:700; color:#F0F6FC; font-size:1.1rem;'>📋 Tabla de Datos de Opciones (Cadena Actual)</h3>", unsafe_allow_html=True)
     if not df_curr.empty:
-        cols_show = ['strike', 'openInterest_c', 'openInterest_p', 'call_gex', 'put_gex', 'net_gex', 'call_dex', 'put_dex', 'net_dex', 'iv_c', 'iv_p']
-        available_cols = [c for c in cols_show if c in df_curr.columns]
+        st.markdown('<div class="data-table-container">', unsafe_allow_html=True)
+        
+        show_cols = ['strike', 'openInterest_c', 'openInterest_p', 'gamma_c', 'gamma_p', 'net_gex', 'call_gex', 'put_gex', 'net_dex', 'iv_c', 'iv_p']
+        available_cols = [c for c in show_cols if c in df_curr.columns]
         
         df_display = df_curr[available_cols].copy()
-        st.dataframe(
-            df_display.style.format({
-                'strike': '${:.2f}',
-                'openInterest_c': '{:,.0f}',
-                'openInterest_p': '{:,.0f}',
-                'call_gex': lambda v: fmt_val(v),
-                'put_gex': lambda v: fmt_val(v),
-                'net_gex': lambda v: fmt_val(v),
-                'call_dex': '${:.2f}M',
-                'put_dex': '${:.2f}M',
-                'net_dex': '${:.2f}M',
-                'iv_c': '{:.2%}',
-                'iv_p': '{:.2%}'
-            }),
-            use_container_width=True,
-            height=450
-        )
-    else:
-        st.info("No hay datos de opciones disponibles para mostrar en la tabla.")
+        df_display = df_display.sort_values('strike').reset_index(drop=True)
         
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.dataframe(
+            df_display,
+            use_container_width=True,
+            height=600,
+            column_config={
+                "strike": st.column_config.NumberColumn("Strike", format="$%.2f"),
+                "openInterest_c": st.column_config.NumberColumn("Call OI", format="%d"),
+                "openInterest_p": st.column_config.NumberColumn("Put OI", format="%d"),
+                "gamma_c": st.column_config.NumberColumn("Call Gamma", format="%.4f"),
+                "gamma_p": st.column_config.NumberColumn("Put Gamma", format="%.4f"),
+                "net_gex": st.column_config.NumberColumn("Net GEX", format="$%.0f"),
+                "call_gex": st.column_config.NumberColumn("Call GEX", format="$%.0f"),
+                "put_gex": st.column_config.NumberColumn("Put GEX", format="$%.0f"),
+                "net_dex": st.column_config.NumberColumn("Net DEX (M)", format="%.2f"),
+                "iv_c": st.column_config.NumberColumn("Call IV", format="%.2f%%"),
+                "iv_p": st.column_config.NumberColumn("Put IV", format="%.2f%%")
+            }
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.warning("No hay datos de opciones disponibles para mostrar en la tabla.")
