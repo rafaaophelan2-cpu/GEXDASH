@@ -1183,28 +1183,40 @@ else:
     vix_desc = "Miedo grande / Movimientos muy expansivos"
     vix_color = "#EF4444"
 
+@st.cache_data(ttl=30)
+def compute_z_matrix_cached(fine_strikes_arr, full_spots_arr, df_records, min_stk, max_stk, iv_val, t_exp_val):
+    Z_mat = np.zeros((len(fine_strikes_arr), len(full_spots_arr)))
+    if len(df_records) == 0 or len(full_spots_arr) == 0:
+        return Z_mat
+    
+    df_temp = pd.DataFrame(df_records)
+    df_sub = df_temp[(df_temp['strike'] >= min_stk - 2) & (df_temp['strike'] <= max_stk + 2)]
+    if df_sub.empty:
+        return Z_mat
+
+    strikes = df_sub['strike'].values
+    net_ois = (df_sub['openInterest_c'] - df_sub['openInterest_p']).values
+    sigma_k = 0.12
+    vol_sqrt_T = max(iv_val * np.sqrt(t_exp_val), 1e-4)
+
+    for t_idx, S_t in enumerate(full_spots_arr):
+        if S_t <= 0 or np.isnan(S_t): continue
+        d1_t = (np.log(S_t / strikes) + (0.045 + 0.5 * iv_val**2) * t_exp_val) / vol_sqrt_T
+        gamma_t = norm.pdf(d1_t) / (S_t * vol_sqrt_T)
+        net_gex_t = net_ois * gamma_t * (S_t ** 2) * 0.01
+
+        for k_idx, K in enumerate(strikes):
+            if net_gex_t[k_idx] == 0: continue
+            gauss_weight = np.exp(-0.5 * ((fine_strikes_arr - K) / sigma_k) ** 2)
+            Z_mat[:, t_idx] += gauss_weight * net_gex_t[k_idx]
+
+    if Z_mat.size > 0 and Z_mat.shape[1] > 1:
+        Z_mat = gaussian_filter(Z_mat, sigma=(0.0, 0.6))
+    return Z_mat
+
 if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
-    Z_matrix_real = np.zeros((len(fine_strikes), len(full_timestamps)))
-    if not df_curr.empty and len(full_timestamps) > 0:
-        sigma_k = 0.12  # Mantiene cada strike muy estrecho sin invadir otros
-        for t_idx, S_t in enumerate(full_spots):
-            if S_t <= 0 or np.isnan(S_t): continue
-            for _, r in df_curr.iterrows():
-                K = r['strike']
-                if K < min_strike - 2 or K > max_strike + 2: continue
-                net_oi = r['openInterest_c'] - r['openInterest_p']
-                if net_oi == 0: continue
-
-                d1_t = (np.log(S_t / K) + (0.045 + 0.5 * atm_iv**2) * T_exp) / (atm_iv * np.sqrt(T_exp))
-                gamma_t = norm.pdf(d1_t) / (S_t * atm_iv * np.sqrt(T_exp))
-                net_gex_t = net_oi * gamma_t * (S_t ** 2) * 0.01
-
-                gauss_weight = np.exp(-0.5 * ((fine_strikes - K) / sigma_k) ** 2)
-                Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
-
-    if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
-        # Filtro con 0.0 en el eje vertical: garantiza cero sobreposición entre strikes
-        Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.0, 0.6))
+    records_dict = df_curr[['strike', 'openInterest_c', 'openInterest_p']].to_dict('records') if not df_curr.empty else []
+    Z_matrix_real = compute_z_matrix_cached(fine_strikes, np.array(full_spots), records_dict, min_strike, max_strike, atm_iv, T_exp)
 
 closes_drift = np.array(full_spots)
 vols_drift = h_1m_reindexed['Volume'].fillna(1000).values if not h_1m_reindexed.empty else np.full(len(full_timestamps), 1000)
@@ -1573,26 +1585,32 @@ with tab_gex:
     df_gex_filtered = df_curr.copy()
     
     if not df_curr.empty and 'exp_key' in df_curr.columns:
-        with st.expander("📂 FILTRO DE EXPIRACIONES Y DTE (GEX INFO)", expanded=False):
-            exp_groups = []
-            for exp_k, group in df_curr.groupby('exp_key'):
-                d_str = group['exp_date'].iloc[0] if 'exp_date' in group.columns else exp_k.split(':')[0]
-                dte_v = int(group['dte'].iloc[0]) if 'dte' in group.columns else 0
-                net_gex_v = group['net_gex'].sum() if 'net_gex' in group.columns else 0.0
-                
-                try:
-                    dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
-                    formatted_date = dt_obj.strftime("%d %b %Y").upper()
-                except Exception:
-                    formatted_date = d_str
+        col_dte_box, _ = st.columns([1, 3])  # Restringe el ancho a exactamente 1/4 del contenedor
+        with col_dte_box:
+            with st.expander("📂 DTE", expanded=False):
+                exp_groups = []
+                for exp_k, group in df_curr.groupby('exp_key'):
+                    d_str = group['exp_date'].iloc[0] if 'exp_date' in group.columns else exp_k.split(':')[0]
+                    dte_v = int(group['dte'].iloc[0]) if 'dte' in group.columns else 0
+                    net_gex_v = group['net_gex'].sum() if 'net_gex' in group.columns else 0.0
                     
-                exp_groups.append({
-                    'exp_key': exp_k,
-                    'date_formatted': formatted_date,
-                    'dte': dte_v,
-                    'net_gex': net_gex_v,
-                    'label': f"{formatted_date} | {dte_v} DTE | Net GEX: {fmt_val(net_gex_v)}"
-                })
+                    try:
+                        dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
+                        formatted_date = dt_obj.strftime("%d %b %Y").upper()
+                    except Exception:
+                        formatted_date = d_str
+                    
+                    # Indicador de color: Verde (🟢) para positivo, Rojo (🔴) para negativo
+                    color_icon = "🟢" if net_gex_v >= 0 else "🔴"
+                    formatted_val = fmt_val(net_gex_v)
+                    
+                    exp_groups.append({
+                        'exp_key': exp_k,
+                        'date_formatted': formatted_date,
+                        'dte': dte_v,
+                        'net_gex': net_gex_v,
+                        'label': f"{formatted_date} {dte_v}DTE | {color_icon} {formatted_val}"
+                    })
             
             exp_df = pd.DataFrame(exp_groups).sort_values('dte').reset_index(drop=True)
             
