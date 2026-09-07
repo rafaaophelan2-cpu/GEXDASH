@@ -540,7 +540,7 @@ auto_refresh = st.sidebar.toggle("AUTO-REFRESCO EN VIVO", value=True)
 refresh_interval = st.sidebar.select_slider(
     "INTERVALO (SEGUNDOS)",
     options=[1, 2, 5, 10, 15, 30, 60],
-    value=1,
+    value=15,
     disabled=not auto_refresh
 )
 
@@ -549,8 +549,10 @@ if auto_refresh:
         from streamlit_autorefresh import st_autorefresh
         st_autorefresh(interval=refresh_interval * 1000, key="gex_auto_refresh")
     except ImportError:
-        time.sleep(refresh_interval)
-        st.rerun()
+        st.components.v1.html(
+            f"<script>setTimeout(function(){{ window.parent.postMessage({{type: 'streamlit:render'}}, '*'); location.reload(); }}, {refresh_interval * 1000});</script>",
+            height=0, width=0
+        )
 
 st.sidebar.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 if st.sidebar.button("🔄 ACTUALIZAR DATOS AHORA", use_container_width=True):
