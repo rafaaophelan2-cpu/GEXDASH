@@ -2009,8 +2009,8 @@ with tab_gex:
                 xaxis_kwargs = safe_strike_range(df_sub)
                 y_max_val = max(df_sub['call_gex'].max(), 0)
                 y_min_val = min(df_sub['put_gex'].min(), 0)
-                y_max_adj = (y_max_val * 1.5) if y_max_val > 0 else 1000
-                y_min_adj = (y_min_val * 1.5) if y_min_val < 0 else -1000
+                y_max_adj = (y_max_val * 1.08) if y_max_val > 0 else 1000
+                y_min_adj = (y_min_val * 1.08) if y_min_val < 0 else -1000
 
                 fig2 = go.Figure()
                 fig2.add_trace(go.Bar(
