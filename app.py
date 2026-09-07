@@ -1798,8 +1798,8 @@ with tab_greeks:
 
     g1, g2, g3, g4, g5 = st.columns(5)
     g1.markdown(f'<div class="metric-card"><div class="metric-label">Net Delta (DEX)</div><div class="metric-value" style="color:{c_dex};">${net_dex_total:.2f}M</div><div class="metric-sub">Delta Exposure</div></div>', unsafe_allow_html=True)
-    g2.markdown(f'<div class="metric-card"><div class="metric-label">Net Theta (TEX)</div><div class="metric-value" style="color:{c_tex};">${net_tex_total:,.0f}</div><div class="metric-sub">Decaimiento / Día</div></div>', unsafe_allow_html=True)
-    g3.markdown(f'<div class="metric-card"><div class="metric-label">Net Vega (VEX)</div><div class="metric-value" style="color:{c_vex};">${net_vex_total:,.0f}</div><div class="metric-sub">Por +1% IV</div></div>', unsafe_allow_html=True)
+    g2.markdown(f'<div class="metric-card"><div class="metric-label">Net Theta (TEX)</div><div class="metric-value" style="color:{c_tex};">{fmt_val(net_tex_total)}</div><div class="metric-sub">Decaimiento / Día</div></div>', unsafe_allow_html=True)
+    g3.markdown(f'<div class="metric-card"><div class="metric-label">Net Vega (VEX)</div><div class="metric-value" style="color:{c_vex};">{fmt_val(net_vex_total)}</div><div class="metric-sub">Por +1% IV</div></div>', unsafe_allow_html=True)
     g4.markdown(f'<div class="metric-card"><div class="metric-label">Net Charm (CHEX)</div><div class="metric-value" style="color:{c_chex};">${net_chex_total:.2f}M</div><div class="metric-sub">Decaimiento Delta / Día</div></div>', unsafe_allow_html=True)
     g5.markdown(f'<div class="metric-card"><div class="metric-label">Net Vanna (VANNA)</div><div class="metric-value" style="color:{c_vanna};">${net_vanna_total:.2f}M</div><div class="metric-sub">Sensibilidad a Vol</div></div>', unsafe_allow_html=True)
 
