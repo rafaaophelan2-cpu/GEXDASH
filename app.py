@@ -1348,12 +1348,27 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
   - **Barrido Inferior**: Falsa ruptura de PW1 cayendo hasta **${sweep_low:.2f} USD** para activar stops de compradores y revertir velozmente por encima de ${pw1_v:.0f} USD. **Precio Numérico de Reversión Esperado**: ${rev_target_low:.2f} USD.
 """
 
-def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
-    net_dex_val = float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0
-    net_tex_val = float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0
-    net_vex_val = float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0
-    net_chex_val = float(df_curr['net_chex'].sum()) if not df_curr.empty and 'net_chex' in df_curr.columns else 0.0
-    net_vanna_val = float(df_curr['net_vanna'].sum()) if not df_curr.empty and 'net_vanna' in df_curr.columns else 0.0
+def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None, dte_filter=None):
+    df_target = df_curr.copy()
+    if dte_filter and not df_target.empty and 'exp_key' in df_target.columns:
+        if isinstance(dte_filter, list):
+            df_target = df_target[df_target['exp_key'].isin(dte_filter)]
+        else:
+            df_target = df_target[df_target['exp_key'] == dte_filter]
+        if not df_target.empty:
+            df_target = df_target.groupby('strike', as_index=False).agg({
+                'net_gex': 'sum', 'call_gex': 'sum', 'put_gex': 'sum',
+                'openInterest_c': 'sum', 'openInterest_p': 'sum',
+                'net_dex': 'sum', 'net_tex': 'sum', 'net_vex': 'sum',
+                'net_chex': 'sum', 'net_vanna': 'sum'
+            })
+
+    net_dex_val = float(df_target['net_dex'].sum()) if not df_target.empty and 'net_dex' in df_target.columns else 0.0
+    net_tex_val = float(df_target['net_tex'].sum()) if not df_target.empty and 'net_tex' in df_target.columns else 0.0
+    net_vex_val = float(df_target['net_vex'].sum()) if not df_target.empty and 'net_vex' in df_target.columns else 0.0
+    net_chex_val = float(df_target['net_chex'].sum()) if not df_target.empty and 'net_chex' in df_target.columns else 0.0
+    net_vanna_val = float(df_target['net_vanna'].sum()) if not df_target.empty and 'net_vanna' in df_target.columns else 0.0
+    net_gex_tot = float(df_target['net_gex'].sum()) if not df_target.empty and 'net_gex' in df_target.columns else net_gex_total
 
     system_prompt = f"""
     Eres un analista cuantitativo institucional experto en opciones y estratega de mercado en el GEX Quant Terminal.
@@ -1364,7 +1379,7 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
     - Índice VIX: {vix_val:.2f} ({vix_status} - {vix_desc})
     - Volatilidad Implícita (IV ATM): {iv_str} | Percentil Rank: {iv_rank_str}
     - Régimen de Gamma: {regime_str} ({condition_str})
-    - Net GEX Total: {fmt_val(net_gex_total).replace('$', '')} USD (Call GEX: {fmt_val(call_gex_sum).replace('$', '')} USD, Put GEX: {fmt_val(put_gex_sum).replace('$', '')} USD)
+    - Net GEX Total: {fmt_val(net_gex_tot).replace('$', '')} USD (Call GEX: {fmt_val(call_gex_sum).replace('$', '')} USD, Put GEX: {fmt_val(put_gex_sum).replace('$', '')} USD)
     - Call Walls (Resistencias): CW1={cw1:.0f} USD, CW2={cw2:.0f} USD, CW3={cw3:.0f} USD
     - Put Walls (Soportes): PW1={pw1:.0f} USD, PW2={pw2:.0f} USD, PW3={pw3:.0f} USD
     - Zero Gamma Level (Flip): {zero_gamma:.2f} USD
@@ -1412,7 +1427,7 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
             log_to_console("Gemini AI Engine", str(e_gemini))
 
     return generar_analisis_local(
-        ticker_symbol, spot_price, net_gex_total, regime_str, condition_str,
+        ticker_symbol, spot_price, net_gex_tot, regime_str, condition_str,
         call_gex_sum, put_gex_sum, total_gex,
         cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
         iv_str, iv_rank_str, net_dex_val, net_tex_val, net_vex_val,
@@ -1438,29 +1453,54 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
     st.caption("Diagnóstico en vivo del mercado según VIX, perfiles GEX, Griegas y Escenarios A, B y C")
 
     col_btn1, col_btn2, col_btn3 = st.columns(3)
-    if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
-        with st.spinner("Analizando pre-market..."):
-            res = consultar_ia(
-                tipo_analisis="Pre-Market",
-                mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando VIX, régimen de Gamma, niveles clave, Griegas y Escenarios A, B y C."
-            )
-            save_chat_message("assistant", res)
+    
+    with col_btn1:
+        if st.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
+            with st.spinner("Analizando pre-market..."):
+                res = consultar_ia(
+                    tipo_analisis="Pre-Market (DTE Siguiente)",
+                    mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando VIX, régimen de Gamma, niveles clave del DTE siguiente y Escenarios A, B y C."
+                )
+                save_chat_message("assistant", res)
+        st.caption("📌 DTE siguiente")
 
-    if col_btn2.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
-        with st.spinner("Analizando intradía..."):
-            res = consultar_ia(
-                tipo_analisis="Mercado Intradía",
-                mensaje_usuario="Genera el informe intradía evaluando lectura de VIX, flujo de Gamma, decaimiento por Charm/Vanna, Net Drift y Escenarios A, B y C."
-            )
-            save_chat_message("assistant", res)
+    with col_btn2:
+        if st.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
+            now_check = pd.Timestamp.now(tz=tz_target)
+            start_m = pd.Timestamp(now_check.strftime('%Y-%m-%d') + " 08:30:00").tz_localize(tz_target)
+            end_m = pd.Timestamp(now_check.strftime('%Y-%m-%d') + " 16:00:00").tz_localize(tz_target)
+            
+            if now_check < start_m or now_check > end_m or now_check.weekday() >= 5:
+                save_chat_message("assistant", "No hay ninguna sesión activa en este momento")
+                st.rerun()
+            else:
+                with st.spinner("Analizando intradía..."):
+                    res = consultar_ia(
+                        tipo_analisis="Mercado Intradía",
+                        mensaje_usuario="Genera el informe intradía evaluando lectura de VIX, flujo de Gamma, decaimiento por Charm/Vanna, Net Drift y Escenarios A, B y C."
+                    )
+                    save_chat_message("assistant", res)
+        st.caption("📌 Sesión Actual")
 
-    if col_btn3.button("🧠 Análisis", key="btn_ai_analisis", use_container_width=True):
-        with st.spinner("Procesando análisis completo..."):
-            res = consultar_ia(
-                tipo_analisis="Análisis Estratégico",
-                mensaje_usuario="Proporciona el Diagnóstico Estratégico completo con niveles exactos, VIX y Escenarios A, B y C de trading."
-            )
-            save_chat_message("assistant", res)
+    with col_btn3:
+        if st.button("🧠 Análisis", key="btn_ai_analisis", use_container_width=True):
+            chosen_dte = st.session_state.get("chat_selected_dte", None)
+            with st.spinner("Procesando análisis completo..."):
+                res = consultar_ia(
+                    tipo_analisis="Análisis Estratégico",
+                    mensaje_usuario="Proporciona el Diagnóstico Estratégico completo con niveles exactos, VIX y Escenarios A, B y C de trading.",
+                    dte_filter=chosen_dte
+                )
+                save_chat_message("assistant", res)
+
+    if not df_curr.empty and 'exp_key' in df_curr.columns:
+        exp_list_chat = sorted(df_curr['exp_key'].unique().tolist())
+        st.selectbox(
+            "Seleccionar DTE para Análisis",
+            options=["TODOS"] + exp_list_chat,
+            key="chat_selected_dte_select",
+            on_change=lambda: st.session_state.update({"chat_selected_dte": None if st.session_state.chat_selected_dte_select == "TODOS" else st.session_state.chat_selected_dte_select})
+        )
 
     st.markdown("---")
 
@@ -1876,6 +1916,10 @@ with tab_drift:
 
 # --- 4. GREEKS (GRIEGAS) ---
 with tab_greeks:
+    df_greeks_filtered = df_curr.copy()
+    if 'selected_dte_keys' in st.session_state and st.session_state.selected_dte_keys:
+        df_greeks_filtered = df_curr[df_curr['exp_key'].isin(st.session_state.selected_dte_keys)]
+    # Usar df_greeks_filtered para generar las gráficas de DEX, VEX, CHEX, VANNA
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
     st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📊 PERFILES DE EXPOSICIÓN DE GRIEGAS</h3>", unsafe_allow_html=True)
 
@@ -1989,7 +2033,18 @@ with tab_back:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 6. DATA ---
-with tab_data:
+col_gen_btn, col_gen_dte = st.columns([3, 1])
+with col_gen_btn:
+    btn_data_diag = st.button("🤖 GENERAR DIAGNÓSTICO DE MERCADO", key="btn_data_diag_ia", use_container_width=True)
+with col_gen_dte:
+    data_dte_opts = ["TODOS"] + sorted(df_curr['exp_key'].unique().tolist()) if not df_curr.empty and 'exp_key' in df_curr.columns else ["TODOS"]
+    sel_data_dte_val = st.selectbox("DTE IA", options=data_dte_opts, key="data_tab_dte_indep", label_visibility="collapsed")
+
+if btn_data_diag:
+    dte_to_pass = None if sel_data_dte_val == "TODOS" else sel_data_dte_val
+    with st.spinner("Generando diagnóstico con la IA..."):
+        res_data_diag = consultar_ia(tipo_analisis=f"Diagnóstico DATA ({sel_data_dte_val})", dte_filter=dte_to_pass)
+        st.markdown(res_data_diag)
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
     st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.15rem; letter-spacing:0.5px;'>📋 DATA SUMMARY & DIAGNÓSTICO INSTITUCIONAL</h3>", unsafe_allow_html=True)
     
