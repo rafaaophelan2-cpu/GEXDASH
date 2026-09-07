@@ -606,7 +606,7 @@ def fetch_option_chain_schwab(symbol, strikes_count):
             contract_type=contract_type,
             strike_count=strikes_count,
             from_date=today,
-            to_date=today + timedelta(days=7)
+            to_date=today + timedelta(days=90) # Extendido a 90 días DTE
         )
         if resp.status_code == 200:
             return resp.json()
@@ -688,11 +688,7 @@ def parse_schwab_chain(chain_data):
         return pd.DataFrame(), None
     
     selected_exp = all_exp_keys[0]
-    calls_for_exp = call_map.get(selected_exp) or {}
-    puts_for_exp = put_map.get(selected_exp) or {}
-    
-    records = {}
-    
+
     def extract_iv(opt_dict):
         vol = float(opt_dict.get('volatility', opt_dict.get('impliedVolatility', 0.0)))
         if vol > 2.0:
@@ -708,51 +704,61 @@ def parse_schwab_chain(chain_data):
         except (ValueError, TypeError):
             return default
 
-    for strike_str, opt_list in calls_for_exp.items():
-        if not opt_list: continue
-        opt = opt_list[0]
-        strike = float(strike_str)
-        if strike not in records:
-            records[strike] = {
-                'strike': strike,
-                'openInterest_c': 0, 'openInterest_p': 0,
-                'gamma_c': 0.0, 'gamma_p': 0.0,
-                'delta_c': 0.0, 'delta_p': 0.0,
-                'theta_c': 0.0, 'theta_p': 0.0,
-                'vega_c': 0.0, 'vega_p': 0.0,
-                'vanna_c': 0.0, 'vanna_p': 0.0,
-                'iv_c': 0.0, 'iv_p': 0.0
-            }
-        records[strike]['openInterest_c'] = int(opt.get('openInterest', 0))
-        records[strike]['gamma_c'] = clean_greek(opt.get('gamma'))
-        records[strike]['delta_c'] = abs(clean_greek(opt.get('delta')))
-        records[strike]['theta_c'] = clean_greek(opt.get('theta'))
-        records[strike]['vega_c'] = clean_greek(opt.get('vega'))
-        records[strike]['iv_c'] = extract_iv(opt)
+    all_records = []
 
-    for strike_str, opt_list in puts_for_exp.items():
-        if not opt_list: continue
-        opt = opt_list[0]
-        strike = float(strike_str)
-        if strike not in records:
-            records[strike] = {
-                'strike': strike,
-                'openInterest_c': 0, 'openInterest_p': 0,
-                'gamma_c': 0.0, 'gamma_p': 0.0,
-                'delta_c': 0.0, 'delta_p': 0.0,
-                'theta_c': 0.0, 'theta_p': 0.0,
-                'vega_c': 0.0, 'vega_p': 0.0,
-                'vanna_c': 0.0, 'vanna_p': 0.0,
-                'iv_c': 0.0, 'iv_p': 0.0
-            }
-        records[strike]['openInterest_p'] = int(opt.get('openInterest', 0))
-        records[strike]['gamma_p'] = clean_greek(opt.get('gamma'))
-        records[strike]['delta_p'] = -abs(clean_greek(opt.get('delta')))
-        records[strike]['theta_p'] = clean_greek(opt.get('theta'))
-        records[strike]['vega_p'] = clean_greek(opt.get('vega'))
-        records[strike]['iv_p'] = extract_iv(opt)
+    for exp_key in all_exp_keys:
+        parts = exp_key.split(':')
+        exp_date_str = parts[0] if len(parts) > 0 else exp_key
+        try:
+            dte_val = int(parts[1]) if len(parts) > 1 else 0
+        except ValueError:
+            dte_val = 0
 
-    df = pd.DataFrame(list(records.values())).sort_values('strike').reset_index(drop=True) if records else pd.DataFrame()
+        calls_for_exp = call_map.get(exp_key) or {}
+        puts_for_exp = put_map.get(exp_key) or {}
+        records = {}
+
+        for strike_str, opt_list in calls_for_exp.items():
+            if not opt_list: continue
+            opt = opt_list[0]
+            strike = float(strike_str)
+            if strike not in records:
+                records[strike] = {
+                    'strike': strike, 'exp_key': exp_key, 'exp_date': exp_date_str, 'dte': dte_val,
+                    'openInterest_c': 0, 'openInterest_p': 0,
+                    'gamma_c': 0.0, 'gamma_p': 0.0, 'delta_c': 0.0, 'delta_p': 0.0,
+                    'theta_c': 0.0, 'theta_p': 0.0, 'vega_c': 0.0, 'vega_p': 0.0,
+                    'vanna_c': 0.0, 'vanna_p': 0.0, 'iv_c': 0.0, 'iv_p': 0.0
+                }
+            records[strike]['openInterest_c'] = int(opt.get('openInterest', 0))
+            records[strike]['gamma_c'] = clean_greek(opt.get('gamma'))
+            records[strike]['delta_c'] = abs(clean_greek(opt.get('delta')))
+            records[strike]['theta_c'] = clean_greek(opt.get('theta'))
+            records[strike]['vega_c'] = clean_greek(opt.get('vega'))
+            records[strike]['iv_c'] = extract_iv(opt)
+
+        for strike_str, opt_list in puts_for_exp.items():
+            if not opt_list: continue
+            opt = opt_list[0]
+            strike = float(strike_str)
+            if strike not in records:
+                records[strike] = {
+                    'strike': strike, 'exp_key': exp_key, 'exp_date': exp_date_str, 'dte': dte_val,
+                    'openInterest_c': 0, 'openInterest_p': 0,
+                    'gamma_c': 0.0, 'gamma_p': 0.0, 'delta_c': 0.0, 'delta_p': 0.0,
+                    'theta_c': 0.0, 'theta_p': 0.0, 'vega_c': 0.0, 'vega_p': 0.0,
+                    'vanna_c': 0.0, 'vanna_p': 0.0, 'iv_c': 0.0, 'iv_p': 0.0
+                }
+            records[strike]['openInterest_p'] = int(opt.get('openInterest', 0))
+            records[strike]['gamma_p'] = clean_greek(opt.get('gamma'))
+            records[strike]['delta_p'] = -abs(clean_greek(opt.get('delta')))
+            records[strike]['theta_p'] = clean_greek(opt.get('theta'))
+            records[strike]['vega_p'] = clean_greek(opt.get('vega'))
+            records[strike]['iv_p'] = extract_iv(opt)
+
+        all_records.extend(list(records.values()))
+
+    df = pd.DataFrame(all_records).sort_values(['dte', 'strike']).reset_index(drop=True) if all_records else pd.DataFrame()
     return df, selected_exp
 
 df_curr, exp_0dte = parse_schwab_chain(chain_raw)
@@ -1564,11 +1570,76 @@ tab_gex, tab_live, tab_drift, tab_greeks, tab_back, tab_data = st.tabs([
 
 # --- 1. GEX INFO ---
 with tab_gex:
+    df_gex_filtered = df_curr.copy()
+    
+    if not df_curr.empty and 'exp_key' in df_curr.columns:
+        with st.expander("📂 FILTRO DE EXPIRACIONES Y DTE (GEX INFO)", expanded=False):
+            exp_groups = []
+            for exp_k, group in df_curr.groupby('exp_key'):
+                d_str = group['exp_date'].iloc[0] if 'exp_date' in group.columns else exp_k.split(':')[0]
+                dte_v = int(group['dte'].iloc[0]) if 'dte' in group.columns else 0
+                net_gex_v = group['net_gex'].sum() if 'net_gex' in group.columns else 0.0
+                
+                try:
+                    dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
+                    formatted_date = dt_obj.strftime("%d %b %Y").upper()
+                except Exception:
+                    formatted_date = d_str
+                    
+                exp_groups.append({
+                    'exp_key': exp_k,
+                    'date_formatted': formatted_date,
+                    'dte': dte_v,
+                    'net_gex': net_gex_v,
+                    'label': f"{formatted_date} | {dte_v} DTE | Net GEX: {fmt_val(net_gex_v)}"
+                })
+            
+            exp_df = pd.DataFrame(exp_groups).sort_values('dte').reset_index(drop=True)
+            
+            col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+            if 'selected_dte_keys' not in st.session_state or not st.session_state.selected_dte_keys:
+                st.session_state.selected_dte_keys = [exp_df['exp_key'].iloc[0]] if not exp_df.empty else []
+            
+            if col_b1.button("0 DTE Only", key="btn_0dte"):
+                st.session_state.selected_dte_keys = [exp_df[exp_df['dte'] == 0]['exp_key'].iloc[0]] if not exp_df[exp_df['dte'] == 0].empty else [exp_df['exp_key'].iloc[0]]
+                st.rerun()
+            if col_b2.button("<= 7 DTE", key="btn_7dte"):
+                st.session_state.selected_dte_keys = exp_df[exp_df['dte'] <= 7]['exp_key'].tolist()
+                st.rerun()
+            if col_b3.button("<= 30 DTE", key="btn_30dte"):
+                st.session_state.selected_dte_keys = exp_df[exp_df['dte'] <= 30]['exp_key'].tolist()
+                st.rerun()
+            if col_b4.button("TODAS LAS DTE", key="btn_all_dte"):
+                st.session_state.selected_dte_keys = exp_df['exp_key'].tolist()
+                st.rerun()
+
+            options_list = exp_df['exp_key'].tolist()
+            labels_dict = dict(zip(exp_df['exp_key'], exp_df['label']))
+            
+            selected_keys = st.multiselect(
+                "Selecciona las expiraciones activas para el gráfico:",
+                options=options_list,
+                default=st.session_state.selected_dte_keys,
+                format_func=lambda x: labels_dict.get(x, x),
+                key="multiselect_dte_gex"
+            )
+            st.session_state.selected_dte_keys = selected_keys
+
+        if st.session_state.selected_dte_keys:
+            df_gex_filtered = df_curr[df_curr['exp_key'].isin(st.session_state.selected_dte_keys)]
+            df_gex_filtered = df_gex_filtered.groupby('strike', as_index=False).agg({
+                'net_gex': 'sum',
+                'call_gex': 'sum',
+                'put_gex': 'sum',
+                'openInterest_c': 'sum',
+                'openInterest_p': 'sum'
+            })
+
     sub_gex1, sub_gex2 = st.tabs(["NET GEX PROFILE", "CALLS vs PUTS"])
     
     with sub_gex1:
-        if not df_curr.empty and 'strike' in df_curr.columns:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+        if not df_gex_filtered.empty and 'strike' in df_gex_filtered.columns:
+            df_sub = df_gex_filtered[(df_gex_filtered['strike'] >= min_strike) & (df_gex_filtered['strike'] <= max_strike)].copy()
             if not df_sub.empty:
                 colors = ['#10B981' if v >= 0 else '#EF4444' for v in df_sub['net_gex']]
                 xaxis_kwargs = safe_strike_range(df_sub)
@@ -1603,8 +1674,8 @@ with tab_gex:
                 st.plotly_chart(fig1, use_container_width=True)
 
     with sub_gex2:
-        if not df_curr.empty and 'strike' in df_curr.columns:
-            df_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+        if not df_gex_filtered.empty and 'strike' in df_gex_filtered.columns:
+            df_sub = df_gex_filtered[(df_gex_filtered['strike'] >= min_strike) & (df_gex_filtered['strike'] <= max_strike)].copy()
             if not df_sub.empty:
                 xaxis_kwargs = safe_strike_range(df_sub)
                 y_max_val = max(df_sub['call_gex'].max(), 0)
