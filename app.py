@@ -1720,26 +1720,60 @@ with tab_drift:
 
         fig_drift = make_subplots(
             rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.06,
-            row_heights=[0.75, 0.25], specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+            row_heights=[0.75, 0.25], specs=[[{"secondary_y": False}], [{"secondary_y": False}]]
         )
 
-        fig_drift.add_trace(go.Scatter(x=full_timestamps, y=call_drift_raw, mode='lines', name='Calls', line=dict(color='#10B981', width=2)), row=1, col=1, secondary_y=False)
-        fig_drift.add_trace(go.Scatter(x=full_timestamps, y=put_drift_raw, mode='lines', name='Puts', line=dict(color='#EF4444', width=2)), row=1, col=1, secondary_y=False)
-        fig_drift.add_trace(go.Scatter(x=full_timestamps, y=net_drift_raw, mode='lines', name='Net', line=dict(color='#F59E0B', width=2)), row=1, col=1, secondary_y=False)
-        fig_drift.add_trace(go.Scatter(x=full_timestamps, y=closes_drift, mode='lines', name=ticker_symbol, line=dict(color='#3B82F6', width=2)), row=1, col=1, secondary_y=True)
-        fig_drift.add_trace(go.Scatter(x=full_timestamps, y=vols_drift, mode='lines', name='Volume', line=dict(color='#10B981', width=1.5), fill='tozeroy', fillcolor='rgba(16, 185, 129, 0.25)'), row=2, col=1)
+        # Escala el movimiento del Spot Price al rango numérico del Drift para compartir 1 solo eje Y
+        drift_max = max(abs(call_drift_raw).max(), abs(put_drift_raw).max(), abs(net_drift_raw).max(), 1.0)
+        spot_change = closes_drift - closes_drift[0]
+        spot_max_change = max(abs(spot_change).max(), 0.001)
+        spot_scaled = (spot_change / spot_max_change) * drift_max
+
+        fig_drift.add_trace(go.Scatter(
+            x=full_timestamps, y=call_drift_raw, mode='lines', name='Calls',
+            line=dict(color='#10B981', width=2),
+            hovertemplate="<b>Hora:</b> %{x}<br><b>Calls:</b> %{customdata}<extra></extra>",
+            customdata=[fmt_val(v) for v in call_drift_raw]
+        ), row=1, col=1)
+
+        fig_drift.add_trace(go.Scatter(
+            x=full_timestamps, y=put_drift_raw, mode='lines', name='Puts',
+            line=dict(color='#EF4444', width=2),
+            hovertemplate="<b>Hora:</b> %{x}<br><b>Puts:</b> %{customdata}<extra></extra>",
+            customdata=[fmt_val(v) for v in put_drift_raw]
+        ), row=1, col=1)
+
+        fig_drift.add_trace(go.Scatter(
+            x=full_timestamps, y=net_drift_raw, mode='lines', name='Net',
+            line=dict(color='#F59E0B', width=2),
+            hovertemplate="<b>Hora:</b> %{x}<br><b>Net Drift:</b> %{customdata}<extra></extra>",
+            customdata=[fmt_val(v) for v in net_drift_raw]
+        ), row=1, col=1)
+
+        fig_drift.add_trace(go.Scatter(
+            x=full_timestamps, y=spot_scaled, mode='lines', name=ticker_symbol,
+            line=dict(color='#3B82F6', width=2),
+            hovertemplate=f"<b>Hora:</b> %{{x}}<br><b>{ticker_symbol}:</b> $%{{customdata:.2f}}<extra></extra>",
+            customdata=closes_drift
+        ), row=1, col=1)
+
+        fig_drift.add_trace(go.Scatter(
+            x=full_timestamps, y=vols_drift, mode='lines', name='Volume',
+            line=dict(color='#10B981', width=1.5), fill='tozeroy',
+            fillcolor='rgba(16, 185, 129, 0.25)'
+        ), row=2, col=1)
 
         fig_drift.update_xaxes(showgrid=True, gridcolor="rgba(255,255,255,0.05)")
-        fig_drift.update_yaxes(fixedrange=False, autorange=True, showgrid=True, gridcolor="rgba(255,255,255,0.05)", row=1, col=1, secondary_y=False)
-        fig_drift.update_yaxes(fixedrange=False, autorange=True, showgrid=True, gridcolor="rgba(255,255,255,0.05)", row=1, col=1, secondary_y=True)
-            
+        fig_drift.update_yaxes(fixedrange=False, autorange=True, showgrid=True, gridcolor="rgba(255,255,255,0.05)", row=1, col=1)
+        fig_drift.update_yaxes(fixedrange=False, autorange=True, showgrid=True, gridcolor="rgba(255,255,255,0.05)", row=2, col=1)
+
         fig_drift.update_layout(
             template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
             showlegend=False, height=650, margin=dict(l=60, r=60, t=30, b=30),
             hovermode="x unified", dragmode='pan', uirevision="static_user_state"
-            )
+        )
         st.plotly_chart(fig_drift, use_container_width=True, config={'scrollZoom': True}, key="net_drift_chart")
-        
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 4. GREEKS (GRIEGAS) ---
