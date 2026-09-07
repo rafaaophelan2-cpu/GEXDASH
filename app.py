@@ -1171,7 +1171,7 @@ else:
 if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
     Z_matrix_real = np.zeros((len(fine_strikes), len(full_timestamps)))
     if not df_curr.empty and len(full_timestamps) > 0:
-        sigma_k = 0.5
+        sigma_k = 0.12  # Mantiene cada strike muy estrecho sin invadir otros
         for t_idx, S_t in enumerate(full_spots):
             if S_t <= 0 or np.isnan(S_t): continue
             for _, r in df_curr.iterrows():
@@ -1188,7 +1188,8 @@ if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
                 Z_matrix_real[:, t_idx] += gauss_weight * net_gex_t
 
     if Z_matrix_real.size > 0 and Z_matrix_real.shape[1] > 1:
-        Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.8, 1.4))
+        # Filtro con 0.0 en el eje vertical: garantiza cero sobreposición entre strikes
+        Z_matrix_real = gaussian_filter(Z_matrix_real, sigma=(0.0, 0.6))
 
 closes_drift = np.array(full_spots)
 vols_drift = h_1m_reindexed['Volume'].fillna(1000).values if not h_1m_reindexed.empty else np.full(len(full_timestamps), 1000)
