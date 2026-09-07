@@ -1639,11 +1639,14 @@ with tab_live:
         fig_live.add_trace(go.Heatmap(
             x=full_timestamps, y=fine_strikes, z=Z_matrix_scaled, customdata=custom_hover_matrix,
             hovertemplate="<b>Hora:</b> %{x}<br><b>Strike:</b> $%{y:.2f}<br><b>Net Gamma Real:</b> %{customdata}<extra></extra>",
-            zsmooth='best', zmin=-1.0, zmax=1.0, zmid=0,
+            zsmooth=False, zmin=-1.0, zmax=1.0, zmid=0,
             colorscale=[
-                [0.0, 'rgba(239, 68, 68, 0.9)'], [0.4, 'rgba(239, 68, 68, 0.15)'],
-                [0.48, 'rgba(6, 8, 13, 0.0)'], [0.52, 'rgba(6, 8, 13, 0.0)'],
-                [0.6, 'rgba(16, 185, 129, 0.15)'], [1.0, 'rgba(16, 185, 129, 0.9)']
+                [0.0, 'rgba(239, 68, 68, 0.95)'],
+                [0.2, 'rgba(239, 68, 68, 0.2)'],
+                [0.45, 'rgba(6, 8, 13, 0.0)'],
+                [0.55, 'rgba(6, 8, 13, 0.0)'],
+                [0.8, 'rgba(16, 185, 129, 0.2)'],
+                [1.0, 'rgba(16, 185, 129, 0.95)']
             ],
             colorbar=dict(title=dict(text="Net GEX ($)", side="top"), x=-0.05)
         ))
