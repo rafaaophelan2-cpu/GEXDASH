@@ -1595,26 +1595,22 @@ with tab_gex:
                     net_gex_v = group['net_gex'].sum() if 'net_gex' in group.columns else 0.0
                     
                     try:
-                            dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
-                            dia = dt_obj.strftime("%d")
-                            mes = dt_obj.strftime("%b").upper()
-                            yy = dt_obj.strftime("%y")
-                        except Exception:
-                            dia, mes, yy = d_str, "", "26"
-
-                        color_icon = "🟢" if net_gex_v >= 0 else "🔴"
-                        formatted_val = fmt_val(net_gex_v)
-                        
-                        # Formato: | DIA | MES | YY | NumeroDTE | +/- Net GEX |
-                        label_str = f"| {dia} | {mes} | {yy} | {dte_v} DTE | {color_icon} {formatted_val} |"
-
-                        exp_groups.append({
-                            'exp_key': exp_k,
-                            'date_formatted': f"{dia} {mes} {yy}",
-                            'dte': dte_v,
-                            'net_gex': net_gex_v,
-                            'label': label_str
-                        })
+                        dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
+                        formatted_date = dt_obj.strftime("%d %b %Y").upper()
+                    except Exception:
+                        formatted_date = d_str
+                    
+                    # Indicador de color: Verde (🟢) para positivo, Rojo (🔴) para negativo
+                    color_icon = "🟢" if net_gex_v >= 0 else "🔴"
+                    formatted_val = fmt_val(net_gex_v)
+                    
+                    exp_groups.append({
+                        'exp_key': exp_k,
+                        'date_formatted': formatted_date,
+                        'dte': dte_v,
+                        'net_gex': net_gex_v,
+                        'label': f"{formatted_date} {dte_v}DTE | {color_icon} {formatted_val}"
+                    })
             
             exp_df = pd.DataFrame(exp_groups).sort_values('dte').reset_index(drop=True)
             
@@ -1995,107 +1991,70 @@ with tab_back:
 # --- 6. DATA ---
 with tab_data:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    sub_data1, sub_data2 = st.tabs(["DATA SUMMARY", "DATA GRID"])
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.15rem; letter-spacing:0.5px;'>📋 DATA SUMMARY & DIAGNÓSTICO INSTITUCIONAL</h3>", unsafe_allow_html=True)
+    
+    st.markdown(f"""
+        <div class="data-summary-box">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h4 style="margin: 0; font-family: 'Plus Jakarta Sans'; font-weight: 700; color: #60A5FA;">⚡ Resumen Ejecutivo de Mercado ({ticker_symbol})</h4>
+                <span style="font-family: 'JetBrains Mono'; font-size: 0.8rem; color: #8B949E;">Índice VIX: <b style="color: {vix_color};">{vix_val:.2f}</b> ({vix_status})</span>
+            </div>
+            <p style="font-family: 'JetBrains Mono'; font-size: 0.82rem; color: #D1D5DB; margin-bottom: 8px;">
+                ● <b>Spot Price:</b> ${spot_price:.2f} USD | <b>Zero Gamma (Flip):</b> ${zero_gamma:.2f} USD | <b>Régimen:</b> <span style="color: {'#10B981' if net_gex_total >= 0 else '#EF4444'};">{regime_str.upper()}</span><br>
+                ● <b>Call Wall Principal (CW1):</b> ${cw1:.0f} USD | <b>Put Wall Principal (PW1):</b> ${pw1:.0f} USD<br>
+                ● <b>Net GEX Total:</b> {fmt_val(net_gex_total)} | <b>Net DEX:</b> ${net_dex_total:.2f}M USD | <b>IV ATM:</b> {iv_str}
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
 
-    # --- SUBDIVISIÓN 1: DATA SUMMARY (Análisis exclusivo de IA) ---
-    with sub_data1:
-        st.markdown("<h4 style='font-weight:700; color:#F0F6FC; margin-bottom:15px;'>🤖 Diagnóstico Personalizado de IA</h4>", unsafe_allow_html=True)
+    col_diag_btn, col_diag_space = st.columns([3.5, 6.5])
+    with col_diag_btn:
+        btn_gen_diag = st.button("🤖 GENERAR DIAGNÓSTICO DE MERCADO (IA)", key="btn_data_ia_diag", use_container_width=True)
+
+    if btn_gen_diag or st.session_state.get("data_ia_diag_result"):
+        if btn_gen_diag:
+            with st.spinner("Procesando análisis profundo y generando Escenarios A, B y C..."):
+                prompt_diag = (
+                    f"Genera un Diagnóstico de Mercado e informe táctico completo para {ticker_symbol} "
+                    f"con base en el resumen de datos actual. Incluye un análisis exhaustivo del impacto del VIX en {vix_val:.2f}, "
+                    f"el comportamiento esperado según el régimen de Gamma, el desglose de Griegas (DEX, TEX, VEX, CHEX, VANNA) "
+                    f"y OBLIGATORIAMENTE los Escenarios A (Continuación / Retesteo Aceptado), B (Rechazo en Nivel Clave) y "
+                    f"C (Trampa / Falsa Ruptura - Liquidity Sweep) especificando los precios numéricos exactos de entrada y objetivo."
+                )
+                diag_output = consultar_ia(tipo_analisis="Diagnóstico Data Summary", mensaje_usuario=prompt_diag)
+                st.session_state["data_ia_diag_result"] = diag_output
+
+        if "data_ia_diag_result" in st.session_state:
+            st.markdown("<div style='margin-top: 15px; padding: 18px; background: rgba(14, 19, 31, 0.95); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 10px;'>", unsafe_allow_html=True)
+            st.markdown(st.session_state["data_ia_diag_result"])
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<hr style='border-color:rgba(255,255,255,0.08); margin: 25px 0;'>", unsafe_allow_html=True)
+    st.markdown("<h4 style='font-family:\"Plus Jakarta Sans\"; font-weight:700; color:#F0F6FC;'>📊 Cadena de Opciones y Exposición Cuantitativa por Strike</h4>", unsafe_allow_html=True)
+    
+    if not df_curr.empty:
+        cols_show = ['strike', 'openInterest_c', 'openInterest_p', 'call_gex', 'put_gex', 'net_gex', 'call_dex', 'put_dex', 'net_dex', 'iv_c', 'iv_p']
+        available_cols = [c for c in cols_show if c in df_curr.columns]
         
-        # Opciones DTE con formato personalizado para la selección
-        dte_options = []
-        if not df_curr.empty and 'exp_key' in df_curr.columns:
-            for exp_k, group in df_curr.groupby('exp_key'):
-                d_str = group['exp_date'].iloc[0] if 'exp_date' in group.columns else exp_k.split(':')[0]
-                dte_v = int(group['dte'].iloc[0]) if 'dte' in group.columns else 0
-                net_gex_v = group['net_gex'].sum() if 'net_gex' in group.columns else 0.0
-                try:
-                    dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
-                    dia = dt_obj.strftime("%d")
-                    mes = dt_obj.strftime("%b").upper()
-                    yy = dt_obj.strftime("%y")
-                except Exception:
-                    dia, mes, yy = d_str, "", "26"
-                
-                color_icon = "🟢" if net_gex_v >= 0 else "🔴"
-                val_str = fmt_val(net_gex_v)
-                dte_options.append({
-                    'key': exp_k,
-                    'label': f"| {dia} | {mes} | {yy} | {dte_v} DTE | {color_icon} {val_str} |"
-                })
-
-        col_sel_dte, col_btn_gen = st.columns([2.5, 1.5])
-        with col_sel_dte:
-            selected_dte_key = None
-            if dte_options:
-                selected_dte_key = st.selectbox(
-                    "Selecciona el DTE para el Análisis:",
-                    options=[item['key'] for item in dte_options],
-                    format_func=lambda x: next((i['label'] for i in dte_options if i['key'] == x), x),
-                    key="sb_dte_ai_analysis"
-                )
-
-        with col_btn_gen:
-            st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
-            btn_diagnostico = st.button("GENERAR DIAGNÓSTICO", key="btn_generar_diagnostico_unique", use_container_width=True)
-
-        if btn_diagnostico:
-            with st.spinner("Procesando análisis de IA para el DTE seleccionado..."):
-                # Filtrado dinámico según DTE seleccionado
-                if selected_dte_key and not df_curr.empty and 'exp_key' in df_curr.columns:
-                    df_dte_sub = df_curr[df_curr['exp_key'] == selected_dte_key]
-                else:
-                    df_dte_sub = df_curr
-
-                # Recálculo de métricas para este DTE específico
-                dte_net_gex = float(df_dte_sub['net_gex'].sum()) if 'net_gex' in df_dte_sub.columns else net_gex_total
-                dte_call_gex = float(df_dte_sub['call_gex'].sum()) if 'call_gex' in df_dte_sub.columns else call_gex_sum
-                dte_put_gex = float(df_dte_sub['put_gex'].sum()) if 'put_gex' in df_dte_sub.columns else put_gex_sum
-                
-                prompt_custom = (
-                    f"Genera un informe estratégico cuantitativo para el DTE seleccionado ({selected_dte_key or 'General'}). "
-                    f"Métricas específicas del DTE: Net GEX = {fmt_val(dte_net_gex)}, Call GEX = {fmt_val(dte_call_gex)}, "
-                    f"Put GEX = {fmt_val(dte_put_gex)}, Spot Price = {spot_price:.2f}, VIX = {vix_val:.2f}. "
-                    f"Evalúa niveles clave, VIX y Escenarios A, B y C."
-                )
-                
-                res_diag = consultar_ia(
-                    tipo_analisis=f"Diagnóstico DTE ({selected_dte_key or 'General'})",
-                    mensaje_usuario=prompt_custom
-                )
-                
-                st.session_state.data_summary_analysis = {
-                    'content': res_diag,
-                    'net_gex': dte_net_gex,
-                    'dte_key': selected_dte_key
-                }
-
-        # Despliegue permanente del resultado dentro de DATA SUMMARY
-        if "data_summary_analysis" in st.session_state:
-            analysis_data = st.session_state.data_summary_analysis
-            net_gex_val = analysis_data['net_gex']
-            color_css = "#10B981" if net_gex_val >= 0 else "#EF4444"
-            
-            st.markdown("---")
-            st.markdown(f"""
-                <div class="data-summary-box">
-                    <div style="font-family:'JetBrains Mono'; font-size:1rem; font-weight:800;">
-                        NET GEX DTE ({analysis_data['dte_key']}): 
-                        <span style="color:{color_css}; margin-left:8px;">{fmt_val(net_gex_val)}</span>
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
-            st.markdown(analysis_data['content'])
-
-    # --- SUBDIVISIÓN 2: DATA GRID (Aparece SIEMPRE) ---
-    with sub_data2:
-        st.markdown("<h4 style='font-weight:700; color:#F0F6FC; margin-bottom:15px;'>📊 Cadena de Opciones y Exposición Cuantitativa por Strike</h4>", unsafe_allow_html=True)
-        if not df_curr.empty:
-            st.dataframe(
-                df_curr,
-                use_container_width=True,
-                height=520
-            )
-        else:
-            st.info("No hay información disponible para la cadena de opciones actual.")
-
+        df_display = df_curr[available_cols].copy()
+        st.dataframe(
+            df_display.style.format({
+                'strike': '${:.2f}',
+                'openInterest_c': '{:,.0f}',
+                'openInterest_p': '{:,.0f}',
+                'call_gex': lambda v: fmt_val(v),
+                'put_gex': lambda v: fmt_val(v),
+                'net_gex': lambda v: fmt_val(v),
+                'call_dex': '${:.2f}M',
+                'put_dex': '${:.2f}M',
+                'net_dex': '${:.2f}M',
+                'iv_c': '{:.2%}',
+                'iv_p': '{:.2%}'
+            }),
+            use_container_width=True,
+            height=450
+        )
+    else:
+        st.info("No hay datos de opciones disponibles para mostrar en la tabla.")
+        
     st.markdown('</div>', unsafe_allow_html=True)
