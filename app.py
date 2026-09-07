@@ -1570,6 +1570,97 @@ def export_snapshot_throttled():
 
 export_snapshot_throttled()
 
+def render_dte_selector(df_source, location_key):
+    """
+    Renderiza el selector de DTE (boton "DTE" + botones rapidos + multiselect).
+    Queda sincronizado globalmente via st.session_state.selected_dte_keys:
+    si se cambia el DTE en cualquier pestana donde se llame esta funcion,
+    cambia tambien en todas las demas. 'location_key' debe ser unico por
+    cada lugar donde se invoque (ej: 'gex', 'grk') para no chocar los keys
+    internos de Streamlit.
+    """
+    df_filtered = df_source.copy()
+
+    if df_source.empty or 'exp_key' not in df_source.columns:
+        return df_filtered
+
+    col_dte_box, _ = st.columns([1, 3])
+    with col_dte_box:
+        with st.expander("📂 DTE", expanded=False):
+            exp_groups = []
+            for exp_k, group in df_source.groupby('exp_key'):
+                d_str = group['exp_date'].iloc[0] if 'exp_date' in group.columns else exp_k.split(':')[0]
+                dte_v = int(group['dte'].iloc[0]) if 'dte' in group.columns else 0
+                net_gex_v = group['net_gex'].sum() if 'net_gex' in group.columns else 0.0
+
+                try:
+                    dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
+                    formatted_date = dt_obj.strftime("%d %b %Y").upper()
+                except Exception:
+                    formatted_date = d_str
+
+                color_icon = "🟢" if net_gex_v >= 0 else "🔴"
+                formatted_val = fmt_val(net_gex_v)
+
+                exp_groups.append({
+                    'exp_key': exp_k,
+                    'date_formatted': formatted_date,
+                    'dte': dte_v,
+                    'net_gex': net_gex_v,
+                    'label': f"{formatted_date} {dte_v}DTE | {color_icon} {formatted_val}"
+                })
+
+            exp_df = pd.DataFrame(exp_groups).sort_values('dte').reset_index(drop=True)
+
+            if 'selected_dte_keys' not in st.session_state or not st.session_state.selected_dte_keys:
+                st.session_state.selected_dte_keys = [exp_df['exp_key'].iloc[0]] if not exp_df.empty else []
+
+            col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+            if col_b1.button("0 DTE Only", key=f"btn_0dte_{location_key}"):
+                st.session_state.selected_dte_keys = [exp_df[exp_df['dte'] == 0]['exp_key'].iloc[0]] if not exp_df[exp_df['dte'] == 0].empty else [exp_df['exp_key'].iloc[0]]
+                st.rerun()
+            if col_b2.button("<= 7 DTE", key=f"btn_7dte_{location_key}"):
+                st.session_state.selected_dte_keys = exp_df[exp_df['dte'] <= 7]['exp_key'].tolist()
+                st.rerun()
+            if col_b3.button("<= 30 DTE", key=f"btn_30dte_{location_key}"):
+                st.session_state.selected_dte_keys = exp_df[exp_df['dte'] <= 30]['exp_key'].tolist()
+                st.rerun()
+            if col_b4.button("TODAS LAS DTE", key=f"btn_all_dte_{location_key}"):
+                st.session_state.selected_dte_keys = exp_df['exp_key'].tolist()
+                st.rerun()
+
+            options_list = exp_df['exp_key'].tolist()
+            labels_dict = dict(zip(exp_df['exp_key'], exp_df['label']))
+
+            # Sincroniza este widget con el estado global ANTES de crearlo, para
+            # que los cambios hechos desde la otra pestana se reflejen aqui tambien.
+            widget_key = f"multiselect_dte_{location_key}"
+            valid_selection = [k for k in st.session_state.selected_dte_keys if k in options_list]
+            if st.session_state.get(widget_key) != valid_selection:
+                st.session_state[widget_key] = valid_selection
+
+            selected_keys = st.multiselect(
+                "Selecciona las expiraciones activas para el gráfico:",
+                options=options_list,
+                format_func=lambda x: labels_dict.get(x, x),
+                key=widget_key
+            )
+            st.session_state.selected_dte_keys = selected_keys
+
+    if st.session_state.selected_dte_keys:
+        agg_map = {
+            'net_gex': 'sum', 'call_gex': 'sum', 'put_gex': 'sum',
+            'openInterest_c': 'sum', 'openInterest_p': 'sum'
+        }
+        for extra_col in ['net_dex', 'call_dex', 'put_dex', 'net_tex', 'net_vex', 'net_chex', 'net_vanna']:
+            if extra_col in df_source.columns:
+                agg_map[extra_col] = 'sum'
+
+        df_filtered = df_source[df_source['exp_key'].isin(st.session_state.selected_dte_keys)]
+        df_filtered = df_filtered.groupby('strike', as_index=False).agg(agg_map)
+
+    return df_filtered
+
 # --- PESTAÑAS PRINCIPALES ---
 tab_gex, tab_live, tab_drift, tab_greeks, tab_back, tab_data = st.tabs([
     "GEX INFO",
@@ -1582,76 +1673,9 @@ tab_gex, tab_live, tab_drift, tab_greeks, tab_back, tab_data = st.tabs([
 
 # --- 1. GEX INFO ---
 with tab_gex:
-    df_gex_filtered = df_curr.copy()
-    
-    if not df_curr.empty and 'exp_key' in df_curr.columns:
-        col_dte_box, _ = st.columns([1, 3])  # Restringe el ancho a exactamente 1/4 del contenedor
-        with col_dte_box:
-            with st.expander("📂 DTE", expanded=False):
-                exp_groups = []
-                for exp_k, group in df_curr.groupby('exp_key'):
-                    d_str = group['exp_date'].iloc[0] if 'exp_date' in group.columns else exp_k.split(':')[0]
-                    dte_v = int(group['dte'].iloc[0]) if 'dte' in group.columns else 0
-                    net_gex_v = group['net_gex'].sum() if 'net_gex' in group.columns else 0.0
-                    
-                    try:
-                        dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
-                        formatted_date = dt_obj.strftime("%d %b %Y").upper()
-                    except Exception:
-                        formatted_date = d_str
-                    
-                    # Indicador de color: Verde (🟢) para positivo, Rojo (🔴) para negativo
-                    color_icon = "🟢" if net_gex_v >= 0 else "🔴"
-                    formatted_val = fmt_val(net_gex_v)
-                    
-                    exp_groups.append({
-                        'exp_key': exp_k,
-                        'date_formatted': formatted_date,
-                        'dte': dte_v,
-                        'net_gex': net_gex_v,
-                        'label': f"{formatted_date} {dte_v}DTE | {color_icon} {formatted_val}"
-                    })
-            
-            exp_df = pd.DataFrame(exp_groups).sort_values('dte').reset_index(drop=True)
-            
-            col_b1, col_b2, col_b3, col_b4 = st.columns(4)
-            if 'selected_dte_keys' not in st.session_state or not st.session_state.selected_dte_keys:
-                st.session_state.selected_dte_keys = [exp_df['exp_key'].iloc[0]] if not exp_df.empty else []
-            
-            if col_b1.button("0 DTE Only", key="btn_0dte"):
-                st.session_state.selected_dte_keys = [exp_df[exp_df['dte'] == 0]['exp_key'].iloc[0]] if not exp_df[exp_df['dte'] == 0].empty else [exp_df['exp_key'].iloc[0]]
-                st.rerun()
-            if col_b2.button("<= 7 DTE", key="btn_7dte"):
-                st.session_state.selected_dte_keys = exp_df[exp_df['dte'] <= 7]['exp_key'].tolist()
-                st.rerun()
-            if col_b3.button("<= 30 DTE", key="btn_30dte"):
-                st.session_state.selected_dte_keys = exp_df[exp_df['dte'] <= 30]['exp_key'].tolist()
-                st.rerun()
-            if col_b4.button("TODAS LAS DTE", key="btn_all_dte"):
-                st.session_state.selected_dte_keys = exp_df['exp_key'].tolist()
-                st.rerun()
+    df_gex_filtered = render_dte_selector(df_curr, "gex")
 
-            options_list = exp_df['exp_key'].tolist()
-            labels_dict = dict(zip(exp_df['exp_key'], exp_df['label']))
-            
-            selected_keys = st.multiselect(
-                "Selecciona las expiraciones activas para el gráfico:",
-                options=options_list,
-                default=st.session_state.selected_dte_keys,
-                format_func=lambda x: labels_dict.get(x, x),
-                key="multiselect_dte_gex"
-            )
-            st.session_state.selected_dte_keys = selected_keys
-
-        if st.session_state.selected_dte_keys:
-            df_gex_filtered = df_curr[df_curr['exp_key'].isin(st.session_state.selected_dte_keys)]
-            df_gex_filtered = df_gex_filtered.groupby('strike', as_index=False).agg({
-                'net_gex': 'sum',
-                'call_gex': 'sum',
-                'put_gex': 'sum',
-                'openInterest_c': 'sum',
-                'openInterest_p': 'sum'
-            })
+    sub_gex1, sub_gex2 = st.tabs(["NET GEX PROFILE", "CALLS vs PUTS"])
 
     sub_gex1, sub_gex2 = st.tabs(["NET GEX PROFILE", "CALLS vs PUTS"])
     
@@ -1879,18 +1903,26 @@ with tab_greeks:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
     st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📊 PERFILES DE EXPOSICIÓN DE GRIEGAS</h3>", unsafe_allow_html=True)
 
-    c_dex = "#10B981" if net_dex_total >= 0 else "#EF4444"
-    c_tex = "#10B981" if net_tex_total >= 0 else "#EF4444"
-    c_vex = "#10B981" if net_vex_total >= 0 else "#EF4444"
-    c_chex = "#10B981" if net_chex_total >= 0 else "#EF4444"
-    c_vanna = "#10B981" if net_vanna_total >= 0 else "#EF4444"
+    df_grk_filtered = render_dte_selector(df_curr, "grk")
+
+    net_dex_total_grk = float(df_grk_filtered['net_dex'].sum()) if not df_grk_filtered.empty and 'net_dex' in df_grk_filtered.columns else 0.0
+    net_tex_total_grk = float(df_grk_filtered['net_tex'].sum()) if not df_grk_filtered.empty and 'net_tex' in df_grk_filtered.columns else 0.0
+    net_vex_total_grk = float(df_grk_filtered['net_vex'].sum()) if not df_grk_filtered.empty and 'net_vex' in df_grk_filtered.columns else 0.0
+    net_chex_total_grk = float(df_grk_filtered['net_chex'].sum()) if not df_grk_filtered.empty and 'net_chex' in df_grk_filtered.columns else 0.0
+    net_vanna_total_grk = float(df_grk_filtered['net_vanna'].sum()) if not df_grk_filtered.empty and 'net_vanna' in df_grk_filtered.columns else 0.0
+
+    c_dex = "#10B981" if net_dex_total_grk >= 0 else "#EF4444"
+    c_tex = "#10B981" if net_tex_total_grk >= 0 else "#EF4444"
+    c_vex = "#10B981" if net_vex_total_grk >= 0 else "#EF4444"
+    c_chex = "#10B981" if net_chex_total_grk >= 0 else "#EF4444"
+    c_vanna = "#10B981" if net_vanna_total_grk >= 0 else "#EF4444"
 
     g1, g2, g3, g4, g5 = st.columns(5)
-    g1.markdown(f'<div class="metric-card"><div class="metric-label">Net Delta (DEX)</div><div class="metric-value" style="color:{c_dex};">${net_dex_total:.2f}M</div><div class="metric-sub">Delta Exposure</div></div>', unsafe_allow_html=True)
-    g2.markdown(f'<div class="metric-card"><div class="metric-label">Net Theta (TEX)</div><div class="metric-value" style="color:{c_tex};">{fmt_val(net_tex_total)}</div><div class="metric-sub">Decaimiento / Día</div></div>', unsafe_allow_html=True)
-    g3.markdown(f'<div class="metric-card"><div class="metric-label">Net Vega (VEX)</div><div class="metric-value" style="color:{c_vex};">{fmt_val(net_vex_total)}</div><div class="metric-sub">Por +1% IV</div></div>', unsafe_allow_html=True)
-    g4.markdown(f'<div class="metric-card"><div class="metric-label">Net Charm (CHEX)</div><div class="metric-value" style="color:{c_chex};">${net_chex_total:.2f}M</div><div class="metric-sub">Decaimiento Delta / Día</div></div>', unsafe_allow_html=True)
-    g5.markdown(f'<div class="metric-card"><div class="metric-label">Net Vanna (VANNA)</div><div class="metric-value" style="color:{c_vanna};">${net_vanna_total:.2f}M</div><div class="metric-sub">Sensibilidad a Vol</div></div>', unsafe_allow_html=True)
+    g1.markdown(f'<div class="metric-card"><div class="metric-label">Net Delta (DEX)</div><div class="metric-value" style="color:{c_dex};">${net_dex_total_grk:.2f}M</div><div class="metric-sub">Delta Exposure</div></div>', unsafe_allow_html=True)
+    g2.markdown(f'<div class="metric-card"><div class="metric-label">Net Theta (TEX)</div><div class="metric-value" style="color:{c_tex};">{fmt_val(net_tex_total_grk)}</div><div class="metric-sub">Decaimiento / Día</div></div>', unsafe_allow_html=True)
+    g3.markdown(f'<div class="metric-card"><div class="metric-label">Net Vega (VEX)</div><div class="metric-value" style="color:{c_vex};">{fmt_val(net_vex_total_grk)}</div><div class="metric-sub">Por +1% IV</div></div>', unsafe_allow_html=True)
+    g4.markdown(f'<div class="metric-card"><div class="metric-label">Net Charm (CHEX)</div><div class="metric-value" style="color:{c_chex};">${net_chex_total_grk:.2f}M</div><div class="metric-sub">Decaimiento Delta / Día</div></div>', unsafe_allow_html=True)
+    g5.markdown(f'<div class="metric-card"><div class="metric-label">Net Vanna (VANNA)</div><div class="metric-value" style="color:{c_vanna};">${net_vanna_total_grk:.2f}M</div><div class="metric-sub">Sensibilidad a Vol</div></div>', unsafe_allow_html=True)
 
     st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
 
@@ -1898,8 +1930,8 @@ with tab_greeks:
         "DELTA (DEX)", "THETA (TEX)", "VEGA (VEX)", "CHARM (CHEX)", "VANNA (VANNA EX)"
     ])
 
-    if not df_curr.empty and 'strike' in df_curr.columns:
-        df_grk_sub = df_curr[(df_curr['strike'] >= min_strike) & (df_curr['strike'] <= max_strike)].copy()
+    if not df_grk_filtered.empty and 'strike' in df_grk_filtered.columns:
+        df_grk_sub = df_grk_filtered[(df_grk_filtered['strike'] >= min_strike) & (df_grk_filtered['strike'] <= max_strike)].copy()
         xaxis_kwargs_grk = safe_strike_range(df_grk_sub)
 
         # 1. DELTA (DEX)
