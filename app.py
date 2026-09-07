@@ -1473,13 +1473,28 @@ def render_dte_selector(df_source, location_key, state_key="selected_dte_keys",
 
     - state_key controla en que variable de session_state se guarda la seleccion.
       Si dos llamadas usan el MISMO state_key quedan sincronizadas entre si
-      (asi es como GEX INFO y GREEKS comparten 'selected_dte_keys' por defecto).
-      Si usas un state_key DISTINTO (ej: 'selected_dte_keys_data'), ese selector
-      queda totalmente INDEPENDIENTE del resto.
+      (asi es como GEX INFO, GREEKS y el panel superior comparten
+      'selected_dte_keys' por defecto). Si usas un state_key DISTINTO
+      (ej: 'selected_dte_keys_data'), ese selector queda totalmente
+      INDEPENDIENTE del resto.
     - 'location_key' debe ser unico por cada lugar donde se invoque la funcion,
       para no chocar los keys internos de los widgets de Streamlit.
     - use_popover=True dibuja el selector como un boton pequeño (st.popover) en
       vez del expander de ancho completo; util para ponerlo al lado de otro boton.
+
+    NOTA IMPORTANTE sobre la sincronizacion entre multiples instancias:
+    Cuando el mismo state_key se comparte entre varias llamadas (GEX INFO,
+    GREEKS, panel superior), cada una tiene su PROPIO widget de multiselect
+    (con su propio widget_key). Para mantenerlos sincronizados sin pisar una
+    edicion manual reciente, se usa un callback (on_change) que, apenas el
+    usuario cambia CUALQUIERA de los multiselects, propaga ese nuevo valor al
+    state_key compartido y a todos los demas widgets registrados bajo ese
+    mismo state_key. Esto evita el bug de "la seleccion manual se revierte
+    sola": antes, cada llamada re-sincronizaba su propio widget leyendo el
+    state_key compartido en CADA rerun (incluso cuando ese widget no fue el
+    que el usuario toco), y como esa lectura ocurria con el valor todavia
+    viejo, terminaba sobreescribiendo el cambio recien hecho antes de que el
+    multiselect llegara a mostrarlo.
     """
     df_filtered = df_source.copy()
 
@@ -1510,40 +1525,65 @@ def render_dte_selector(df_source, location_key, state_key="selected_dte_keys",
         })
 
     exp_df = pd.DataFrame(exp_groups).sort_values('dte').reset_index(drop=True)
+    options_list = exp_df['exp_key'].tolist()
 
     if state_key not in st.session_state or not st.session_state[state_key]:
         st.session_state[state_key] = [exp_df['exp_key'].iloc[0]] if not exp_df.empty else []
 
+    widget_key = f"multiselect_dte_{location_key}"
+
+    # Registro de todos los widget_keys que comparten este mismo state_key, para
+    # poder propagar un cambio de uno hacia los demas via callback.
+    registry_key = f"_dte_widget_registry__{state_key}"
+    if registry_key not in st.session_state:
+        st.session_state[registry_key] = set()
+    st.session_state[registry_key].add(widget_key)
+
+    def _apply_selection(new_keys):
+        """Aplica new_keys al state_key compartido y a TODOS los widgets
+        (incluido el propio) que comparten ese state_key, para que todos
+        queden sincronizados de inmediato."""
+        st.session_state[state_key] = new_keys
+        for other_key in st.session_state[registry_key]:
+            st.session_state[other_key] = new_keys
+
+    def _on_multiselect_change():
+        # Se dispara ANTES de que el script vuelva a correr, con el valor
+        # nuevo ya cargado en st.session_state[widget_key]. Lo propagamos
+        # hacia el state_key compartido y hacia los demas widgets.
+        _apply_selection(st.session_state[widget_key])
+
     def _render_controls():
         col_b1, col_b2, col_b3, col_b4 = st.columns(4)
         if col_b1.button("0 DTE Only", key=f"btn_0dte_{location_key}"):
-            st.session_state[state_key] = [exp_df[exp_df['dte'] == 0]['exp_key'].iloc[0]] if not exp_df[exp_df['dte'] == 0].empty else [exp_df['exp_key'].iloc[0]]
+            sel = [exp_df[exp_df['dte'] == 0]['exp_key'].iloc[0]] if not exp_df[exp_df['dte'] == 0].empty else [exp_df['exp_key'].iloc[0]]
+            _apply_selection(sel)
             st.rerun()
         if col_b2.button("<= 7 DTE", key=f"btn_7dte_{location_key}"):
-            st.session_state[state_key] = exp_df[exp_df['dte'] <= 7]['exp_key'].tolist()
+            _apply_selection(exp_df[exp_df['dte'] <= 7]['exp_key'].tolist())
             st.rerun()
         if col_b3.button("<= 30 DTE", key=f"btn_30dte_{location_key}"):
-            st.session_state[state_key] = exp_df[exp_df['dte'] <= 30]['exp_key'].tolist()
+            _apply_selection(exp_df[exp_df['dte'] <= 30]['exp_key'].tolist())
             st.rerun()
         if col_b4.button("TODAS LAS DTE", key=f"btn_all_dte_{location_key}"):
-            st.session_state[state_key] = exp_df['exp_key'].tolist()
+            _apply_selection(exp_df['exp_key'].tolist())
             st.rerun()
 
-        options_list = exp_df['exp_key'].tolist()
         labels_dict = dict(zip(exp_df['exp_key'], exp_df['label']))
 
-        widget_key = f"multiselect_dte_{location_key}"
-        valid_selection = [k for k in st.session_state[state_key] if k in options_list]
-        if st.session_state.get(widget_key) != valid_selection:
-            st.session_state[widget_key] = valid_selection
+        # Solo se inicializa la PRIMERA vez que existe este widget en la sesion;
+        # despues de eso, el propio widget (y el callback) son la fuente de
+        # verdad, para no pisar ediciones manuales en reruns posteriores.
+        if widget_key not in st.session_state:
+            st.session_state[widget_key] = [k for k in st.session_state[state_key] if k in options_list]
 
-        selected_keys = st.multiselect(
+        st.multiselect(
             "Selecciona las expiraciones activas para el gráfico:",
             options=options_list,
             format_func=lambda x: labels_dict.get(x, x),
-            key=widget_key
+            key=widget_key,
+            on_change=_on_multiselect_change
         )
-        st.session_state[state_key] = selected_keys
 
     if use_popover:
         with st.popover(popover_label, use_container_width=True):
@@ -2006,19 +2046,39 @@ with tab_gex:
         if not df_gex_filtered.empty and 'strike' in df_gex_filtered.columns:
             df_sub = df_gex_filtered[(df_gex_filtered['strike'] >= min_strike) & (df_gex_filtered['strike'] <= max_strike)].copy()
             if not df_sub.empty:
+                df_sub = df_sub.reset_index(drop=True)
                 xaxis_kwargs = safe_strike_range(df_sub)
                 y_max_val = max(df_sub['call_gex'].max(), 0)
                 y_min_val = min(df_sub['put_gex'].min(), 0)
                 y_max_adj = (y_max_val * 1.08) if y_max_val > 0 else 1000
                 y_min_adj = (y_min_val * 1.08) if y_min_val < 0 else -1000
 
+                # Mismo criterio de delineado blanco que NET GEX PROFILE: resalta
+                # la barra de Call GEX mas grande y la de Put GEX mas negativa.
+                max_call_idx = df_sub['call_gex'].idxmax() if (df_sub['call_gex'] > 0).any() else None
+                min_put_idx = df_sub['put_gex'].idxmin() if (df_sub['put_gex'] < 0).any() else None
+
+                call_line_colors, call_line_widths = [], []
+                put_line_colors, put_line_widths = [], []
+                for idx in df_sub.index:
+                    if idx == max_call_idx:
+                        call_line_colors.append('#FFFFFF'); call_line_widths.append(2.5)
+                    else:
+                        call_line_colors.append('rgba(0,0,0,0)'); call_line_widths.append(0)
+                    if idx == min_put_idx:
+                        put_line_colors.append('#FFFFFF'); put_line_widths.append(2.5)
+                    else:
+                        put_line_colors.append('rgba(0,0,0,0)'); put_line_widths.append(0)
+
                 fig2 = go.Figure()
                 fig2.add_trace(go.Bar(
-                    x=df_sub['strike'], y=df_sub['call_gex'], name="Call GEX (+)", marker_color='#10B981',
+                    x=df_sub['strike'], y=df_sub['call_gex'], name="Call GEX (+)",
+                    marker=dict(color='#10B981', line=dict(color=call_line_colors, width=call_line_widths)),
                     hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Call GEX:</b> %{customdata}<extra></extra>", customdata=[fmt_val(v) for v in df_sub['call_gex']]
                 ))
                 fig2.add_trace(go.Bar(
-                    x=df_sub['strike'], y=df_sub['put_gex'], name="Put GEX (-)", marker_color='#EF4444',
+                    x=df_sub['strike'], y=df_sub['put_gex'], name="Put GEX (-)",
+                    marker=dict(color='#EF4444', line=dict(color=put_line_colors, width=put_line_widths)),
                     hovertemplate="<b>Strike:</b> $%{x:.2f}<br><b>Put GEX:</b> %{customdata}<extra></extra>", customdata=[fmt_val(v) for v in df_sub['put_gex']]
                 ))
                 
