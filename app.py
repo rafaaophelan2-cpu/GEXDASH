@@ -1802,7 +1802,45 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
             with st.chat_message("assistant"):
                 st.write(respuesta_bot)
 
-# --- PANEL DE MÉTRICAS TOP ---
+# --- PANEL DE MÉTRICAS TOP (AHORA FILTRABLE POR DTE) ---
+col_metrics_title, col_metrics_dte = st.columns([8.5, 1.5])
+with col_metrics_title:
+    st.markdown("<p style='margin:0 0 4px 0; font-family:\"JetBrains Mono\"; font-size:0.72rem; color:#6E7681; letter-spacing:0.5px;'>📊 PANEL DE MÉTRICAS (filtrable por DTE — compartido con GEX INFO y GREEKS)</p>", unsafe_allow_html=True)
+with col_metrics_dte:
+    # Mismo state_key por defecto ("selected_dte_keys") que usan GEX INFO y GREEKS:
+    # al compartir la variable de session_state, cambiar el DTE aquí, en GEX INFO
+    # o en GREEKS actualiza los tres paneles a la vez.
+    df_header_filtered = render_dte_selector(
+        df_curr, location_key="header_metrics",
+        state_key="selected_dte_keys",
+        use_popover=True, popover_label="📂 DTE"
+    )
+
+if not df_header_filtered.empty and 'net_gex' in df_header_filtered.columns:
+    net_gex_total = float(df_header_filtered['net_gex'].sum())
+    call_gex_sum = float(df_header_filtered['call_gex'].sum()) if 'call_gex' in df_header_filtered.columns else 0.0
+    put_gex_sum = float(df_header_filtered['put_gex'].sum()) if 'put_gex' in df_header_filtered.columns else 0.0
+    total_gex = float(abs(call_gex_sum) + abs(put_gex_sum))
+    call_oi_sum = int(df_header_filtered['openInterest_c'].sum()) if 'openInterest_c' in df_header_filtered.columns else 0
+    put_oi_sum = int(df_header_filtered['openInterest_p'].sum()) if 'openInterest_p' in df_header_filtered.columns else 0
+    total_oi_sum = call_oi_sum + put_oi_sum
+
+    df_hdr_sorted = df_header_filtered.sort_values('strike').reset_index(drop=True)
+    calls_dom_hdr = df_hdr_sorted[df_hdr_sorted['net_gex'] > 0].sort_values('net_gex', ascending=False)
+    cw1 = float(calls_dom_hdr['strike'].iloc[0]) if not calls_dom_hdr.empty else spot_price + 5
+    puts_dom_hdr = df_hdr_sorted[df_hdr_sorted['net_gex'] < 0].sort_values('net_gex', ascending=True)
+    pw1 = float(puts_dom_hdr['strike'].iloc[0]) if not puts_dom_hdr.empty else spot_price - 5
+
+    df_hdr_sorted['cum_gex'] = df_hdr_sorted['net_gex'].cumsum()
+    zero_gamma = spot_price
+    if not df_hdr_sorted.empty:
+        zg_idx_hdr = df_hdr_sorted['cum_gex'].abs().idxmin()
+        if zg_idx_hdr in df_hdr_sorted.index:
+            zero_gamma = float(df_hdr_sorted.loc[zg_idx_hdr]['strike'])
+# Si la seleccion de DTE queda vacia, se conservan los totales globales (todas
+# las expiraciones) ya calculados mas arriba en el script, en vez de mostrar
+# el panel en blanco.
+
 cw_diff = ((cw1 - spot_price) / spot_price * 100) if spot_price > 0 else 0
 pw_diff = ((pw1 - spot_price) / spot_price * 100) if spot_price > 0 else 0
 zg_diff = ((zero_gamma - spot_price) / spot_price * 100) if spot_price > 0 else 0
@@ -1960,7 +1998,7 @@ with tab_gex:
                     title=dict(text="<b>Strike Profile (Net Gamma Exposure)</b>", font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")),
                     xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono", color="#8B949E"), zeroline=False, **xaxis_kwargs),
                     yaxis=dict(title="Net GEX ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono", color="#8B949E"), zeroline=True, zerolinecolor="rgba(255,255,255,0.15)", zerolinewidth=1, range=[y_min_adj, y_max_adj]),
-                    height=710, margin=dict(l=50, r=40, t=50, b=40)
+                    height=980, margin=dict(l=50, r=40, t=50, b=40)
                 )
                 st.plotly_chart(fig1, use_container_width=True)
 
@@ -1993,7 +2031,7 @@ with tab_gex:
                     barmode='relative',
                     xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono"), **xaxis_kwargs),
                     yaxis=dict(title="Gamma Exposure ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono"), range=[y_min_adj, y_max_adj]),
-                    height=710, margin=dict(l=50, r=40, t=50, b=40)
+                    height=560, margin=dict(l=50, r=40, t=50, b=40)
                 )
                 st.plotly_chart(fig2, use_container_width=True)
 
