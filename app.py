@@ -1348,26 +1348,56 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
   - **Barrido Inferior**: Falsa ruptura de PW1 cayendo hasta **${sweep_low:.2f} USD** para activar stops de compradores y revertir velozmente por encima de ${pw1_v:.0f} USD. **Precio Numérico de Reversión Esperado**: ${rev_target_low:.2f} USD.
 """
 
-def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
-    net_dex_val = float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0
-    net_tex_val = float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0
-    net_vex_val = float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0
-    net_chex_val = float(df_curr['net_chex'].sum()) if not df_curr.empty and 'net_chex' in df_curr.columns else 0.0
-    net_vanna_val = float(df_curr['net_vanna'].sum()) if not df_curr.empty and 'net_vanna' in df_curr.columns else 0.0
+def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
+                  metrics_override=None, dte_context_label=None):
+    """
+    metrics_override: dict opcional (salida de compute_metrics_for_dte) para que
+    el analisis use los niveles/griegas de un DTE especifico en vez de los
+    globales (todas las expiraciones combinadas).
+    dte_context_label: texto opcional que se le indica a la IA para dejar claro
+    con que expiracion(es) se genero el analisis.
+    """
+    m = metrics_override or {}
+
+    net_dex_val = m.get("net_dex_val", float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0)
+    net_tex_val = m.get("net_tex_val", float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0)
+    net_vex_val = m.get("net_vex_val", float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0)
+    net_chex_val = m.get("net_chex_val", float(df_curr['net_chex'].sum()) if not df_curr.empty and 'net_chex' in df_curr.columns else 0.0)
+    net_vanna_val = m.get("net_vanna_val", float(df_curr['net_vanna'].sum()) if not df_curr.empty and 'net_vanna' in df_curr.columns else 0.0)
+
+    cw1_ia = m.get("cw1", cw1)
+    cw2_ia = m.get("cw2", cw2)
+    cw3_ia = m.get("cw3", cw3)
+    pw1_ia = m.get("pw1", pw1)
+    pw2_ia = m.get("pw2", pw2)
+    pw3_ia = m.get("pw3", pw3)
+    zero_gamma_ia = m.get("zero_gamma", zero_gamma)
+    net_gex_total_ia = m.get("net_gex_total", net_gex_total)
+    call_gex_sum_ia = m.get("call_gex_sum", call_gex_sum)
+    put_gex_sum_ia = m.get("put_gex_sum", put_gex_sum)
+    regime_str_ia = m.get("regime_str", regime_str)
+    condition_str_ia = m.get("condition_str", condition_str)
+    iv_str_ia = m.get("iv_str", iv_str)
+    iv_rank_str_ia = m.get("iv_rank_str", iv_rank_str)
+
+    dte_note = (
+        f"\n    NOTA IMPORTANTE: Este analisis se genera EXCLUSIVAMENTE con los datos de la(s) expiracion(es): {dte_context_label}.\n"
+        if dte_context_label else ""
+    )
 
     system_prompt = f"""
     Eres un analista cuantitativo institucional experto en opciones y estratega de mercado en el GEX Quant Terminal.
-    Tu objetivo es entregar un análisis técnico, estructurado y profundo para {ticker_symbol}. 
+    Tu objetivo es entregar un análisis técnico, estructurado y profundo para {ticker_symbol}. {dte_note}
 
     DATOS DEL MERCADO EN TIEMPO REAL ({ticker_symbol}):
     - Ticker: {ticker_symbol} | Spot Price: {spot_price:.2f} USD | Ratio NQ: {conversion_ratio:.4f}
     - Índice VIX: {vix_val:.2f} ({vix_status} - {vix_desc})
-    - Volatilidad Implícita (IV ATM): {iv_str} | Percentil Rank: {iv_rank_str}
-    - Régimen de Gamma: {regime_str} ({condition_str})
-    - Net GEX Total: {fmt_val(net_gex_total).replace('$', '')} USD (Call GEX: {fmt_val(call_gex_sum).replace('$', '')} USD, Put GEX: {fmt_val(put_gex_sum).replace('$', '')} USD)
-    - Call Walls (Resistencias): CW1={cw1:.0f} USD, CW2={cw2:.0f} USD, CW3={cw3:.0f} USD
-    - Put Walls (Soportes): PW1={pw1:.0f} USD, PW2={pw2:.0f} USD, PW3={pw3:.0f} USD
-    - Zero Gamma Level (Flip): {zero_gamma:.2f} USD
+    - Volatilidad Implícita (IV ATM): {iv_str_ia} | Percentil Rank: {iv_rank_str_ia}
+    - Régimen de Gamma: {regime_str_ia} ({condition_str_ia})
+    - Net GEX Total: {fmt_val(net_gex_total_ia).replace('$', '')} USD (Call GEX: {fmt_val(call_gex_sum_ia).replace('$', '')} USD, Put GEX: {fmt_val(put_gex_sum_ia).replace('$', '')} USD)
+    - Call Walls (Resistencias): CW1={cw1_ia:.0f} USD, CW2={cw2_ia:.0f} USD, CW3={cw3_ia:.0f} USD
+    - Put Walls (Soportes): PW1={pw1_ia:.0f} USD, PW2={pw2_ia:.0f} USD, PW3={pw3_ia:.0f} USD
+    - Zero Gamma Level (Flip): {zero_gamma_ia:.2f} USD
     - Delta Exposure (DEX): {net_dex_val:.2f}M USD | Theta Exposure (TEX): {net_tex_val:,.0f} USD/día
     - Vega Exposure (VEX): {net_vex_val:,.0f} USD/1% IV | Charm Exposure (CHEX): {net_chex_val:.2f}M USD/día | Vanna (VANNA): {net_vanna_val:.2f}M USD
     - Net Premium Drift: {fmt_val(last_net_drift).replace('$', '')} USD
@@ -1384,8 +1414,8 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
        **2. Puntos Clave de Inflexión y Niveles Operativos**
        **3. Análisis de Flujo y Griegas (DEX, VEX, CHEX, VANNA, Net Drift)**
        **4. Escenarios Operativos Cuantitativos (DETALLAR DE MANERA OBLIGATORIA CON PRECIOS EXACTOS):**
-          * **Escenario A (Continuación / Retesteo Aceptado)**: Detalla el comportamiento si el precio rompe y sostiene un nivel clave (CW1={cw1:.0f} o PW1={pw1:.0f}), especificando los precios exactos de entrada y objetivo.
-          * **Escenario B (Rechazo en Nivel Clave)**: Detalla qué ocurre al rebotar o ser rechazado en la resistencia/soporte principal (CW1 o PW1), con sus precios reales de entrada y objetivos hacia Zero Gamma ({zero_gamma:.2f}).
+          * **Escenario A (Continuación / Retesteo Aceptado)**: Detalla el comportamiento si el precio rompe y sostiene un nivel clave (CW1={cw1_ia:.0f} o PW1={pw1_ia:.0f}), especificando los precios exactos de entrada y objetivo.
+          * **Escenario B (Rechazo en Nivel Clave)**: Detalla qué ocurre al rebotar o ser rechazado en la resistencia/soporte principal (CW1 o PW1), con sus precios reales de entrada y objetivos hacia Zero Gamma ({zero_gamma_ia:.2f}).
           * **Escenario C (Trampa / Falsa Ruptura)**: Detalla la maniobra de barrido de liquidez (falsa ruptura por encima de CW1 o debajo de PW1) y el precio numérico de reversión esperado.
     3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$). Usa fuentes y letras normales en USD.
     """
@@ -1412,12 +1442,263 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
             log_to_console("Gemini AI Engine", str(e_gemini))
 
     return generar_analisis_local(
-        ticker_symbol, spot_price, net_gex_total, regime_str, condition_str,
-        call_gex_sum, put_gex_sum, total_gex,
-        cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
-        iv_str, iv_rank_str, net_dex_val, net_tex_val, net_vex_val,
+        ticker_symbol, spot_price, net_gex_total_ia, regime_str_ia, condition_str_ia,
+        call_gex_sum_ia, put_gex_sum_ia, total_gex,
+        cw1_ia, cw2_ia, cw3_ia, pw1_ia, pw2_ia, pw3_ia, zero_gamma_ia,
+        iv_str_ia, iv_rank_str_ia, net_dex_val, net_tex_val, net_vex_val,
         net_chex_val, net_vanna_val, last_net_drift, vix_val
     )
+
+def render_dte_selector(df_source, location_key, state_key="selected_dte_keys",
+                         use_popover=False, popover_label="📂 DTE"):
+    """
+    Renderiza el selector de DTE (boton "DTE" + botones rapidos + multiselect).
+
+    - state_key controla en que variable de session_state se guarda la seleccion.
+      Si dos llamadas usan el MISMO state_key quedan sincronizadas entre si
+      (asi es como GEX INFO y GREEKS comparten 'selected_dte_keys' por defecto).
+      Si usas un state_key DISTINTO (ej: 'selected_dte_keys_data'), ese selector
+      queda totalmente INDEPENDIENTE del resto.
+    - 'location_key' debe ser unico por cada lugar donde se invoque la funcion,
+      para no chocar los keys internos de los widgets de Streamlit.
+    - use_popover=True dibuja el selector como un boton pequeño (st.popover) en
+      vez del expander de ancho completo; util para ponerlo al lado de otro boton.
+    """
+    df_filtered = df_source.copy()
+
+    if df_source.empty or 'exp_key' not in df_source.columns:
+        return df_filtered
+
+    exp_groups = []
+    for exp_k, group in df_source.groupby('exp_key'):
+        d_str = group['exp_date'].iloc[0] if 'exp_date' in group.columns else exp_k.split(':')[0]
+        dte_v = int(group['dte'].iloc[0]) if 'dte' in group.columns else 0
+        net_gex_v = group['net_gex'].sum() if 'net_gex' in group.columns else 0.0
+
+        try:
+            dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
+            formatted_date = dt_obj.strftime("%d %b %Y").upper()
+        except Exception:
+            formatted_date = d_str
+
+        color_icon = "🟢" if net_gex_v >= 0 else "🔴"
+        formatted_val = fmt_val(net_gex_v)
+
+        exp_groups.append({
+            'exp_key': exp_k,
+            'date_formatted': formatted_date,
+            'dte': dte_v,
+            'net_gex': net_gex_v,
+            'label': f"{formatted_date} {dte_v}DTE | {color_icon} {formatted_val}"
+        })
+
+    exp_df = pd.DataFrame(exp_groups).sort_values('dte').reset_index(drop=True)
+
+    if state_key not in st.session_state or not st.session_state[state_key]:
+        st.session_state[state_key] = [exp_df['exp_key'].iloc[0]] if not exp_df.empty else []
+
+    def _render_controls():
+        col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+        if col_b1.button("0 DTE Only", key=f"btn_0dte_{location_key}"):
+            st.session_state[state_key] = [exp_df[exp_df['dte'] == 0]['exp_key'].iloc[0]] if not exp_df[exp_df['dte'] == 0].empty else [exp_df['exp_key'].iloc[0]]
+            st.rerun()
+        if col_b2.button("<= 7 DTE", key=f"btn_7dte_{location_key}"):
+            st.session_state[state_key] = exp_df[exp_df['dte'] <= 7]['exp_key'].tolist()
+            st.rerun()
+        if col_b3.button("<= 30 DTE", key=f"btn_30dte_{location_key}"):
+            st.session_state[state_key] = exp_df[exp_df['dte'] <= 30]['exp_key'].tolist()
+            st.rerun()
+        if col_b4.button("TODAS LAS DTE", key=f"btn_all_dte_{location_key}"):
+            st.session_state[state_key] = exp_df['exp_key'].tolist()
+            st.rerun()
+
+        options_list = exp_df['exp_key'].tolist()
+        labels_dict = dict(zip(exp_df['exp_key'], exp_df['label']))
+
+        widget_key = f"multiselect_dte_{location_key}"
+        valid_selection = [k for k in st.session_state[state_key] if k in options_list]
+        if st.session_state.get(widget_key) != valid_selection:
+            st.session_state[widget_key] = valid_selection
+
+        selected_keys = st.multiselect(
+            "Selecciona las expiraciones activas para el gráfico:",
+            options=options_list,
+            format_func=lambda x: labels_dict.get(x, x),
+            key=widget_key
+        )
+        st.session_state[state_key] = selected_keys
+
+    if use_popover:
+        with st.popover(popover_label, use_container_width=True):
+            _render_controls()
+    else:
+        col_dte_box, _ = st.columns([1, 3])
+        with col_dte_box:
+            with st.expander(popover_label, expanded=False):
+                _render_controls()
+
+    if st.session_state[state_key]:
+        agg_map = {
+            'net_gex': 'sum', 'call_gex': 'sum', 'put_gex': 'sum',
+            'openInterest_c': 'sum', 'openInterest_p': 'sum'
+        }
+        for extra_col in ['net_dex', 'call_dex', 'put_dex', 'net_tex', 'net_vex', 'net_chex', 'net_vanna']:
+            if extra_col in df_source.columns:
+                agg_map[extra_col] = 'sum'
+
+        df_filtered = df_source[df_source['exp_key'].isin(st.session_state[state_key])]
+        df_filtered = df_filtered.groupby('strike', as_index=False).agg(agg_map)
+
+    return df_filtered
+
+# --- SESION DE TRADING (UTC-5 / LIMA) Y METRICAS POR DTE ---
+def get_session_state():
+    """
+    Calcula el estado de la sesion de trading en hora de Lima (UTC-5), de forma
+    INDEPENDIENTE al selector de Timezone del sidebar (tz_choice). La sesion de
+    trading es de 08:30 a 15:00 hora Lima, de Lunes a Viernes.
+
+    Devuelve:
+      - now_lima: Timestamp actual en America/Lima
+      - intraday_active: True si la sesion esta activa en este momento
+      - today_date_str: fecha (YYYY-MM-DD) de hoy en Lima
+      - premarket_date_str: fecha (YYYY-MM-DD) de la sesion "proxima" aun no
+        iniciada (hoy mismo si aun no son las 08:30, si no, el siguiente dia habil)
+    """
+    now_lima = pd.Timestamp.now(tz="America/Lima")
+    is_weekday = now_lima.weekday() < 5  # 0=Lunes ... 4=Viernes
+
+    session_start = now_lima.replace(hour=8, minute=30, second=0, microsecond=0)
+    session_end = now_lima.replace(hour=15, minute=0, second=0, microsecond=0)
+
+    intraday_active = bool(is_weekday and session_start <= now_lima <= session_end)
+
+    if is_weekday and now_lima <= session_start:
+        premarket_date = now_lima.normalize()
+    else:
+        premarket_date = now_lima.normalize() + pd.Timedelta(days=1)
+        while premarket_date.weekday() >= 5:
+            premarket_date += pd.Timedelta(days=1)
+
+    return {
+        "now_lima": now_lima,
+        "intraday_active": intraday_active,
+        "today_date_str": now_lima.strftime('%Y-%m-%d'),
+        "premarket_date_str": premarket_date.strftime('%Y-%m-%d'),
+    }
+
+
+def find_exp_keys_by_date(df_source, target_date_str):
+    """
+    Busca los exp_key de df_source cuya fecha de expiracion (exp_date) coincide
+    exactamente con target_date_str (YYYY-MM-DD). Si no hay ninguna expiracion
+    exactamente en esa fecha, usa la expiracion disponible mas cercana hacia
+    adelante (la siguiente fecha de trading listada).
+    """
+    if df_source is None or df_source.empty or 'exp_date' not in df_source.columns:
+        return []
+
+    exact = df_source[df_source['exp_date'] == target_date_str]['exp_key'].unique().tolist()
+    if exact:
+        return exact
+
+    future = df_source[df_source['exp_date'] > target_date_str]
+    if not future.empty:
+        nearest_date = future['exp_date'].min()
+        return df_source[df_source['exp_date'] == nearest_date]['exp_key'].unique().tolist()
+
+    return []
+
+
+def compute_metrics_for_dte(df_source, exp_keys, spot_ref):
+    """
+    Recalcula Call/Put Walls, Zero Gamma, Net GEX y Griegas (DEX/TEX/VEX/CHEX/VANNA)
+    usando UNICAMENTE los datos de las expiraciones (exp_key) indicadas en exp_keys.
+    No vuelve a calcular Gamma/Delta/etc desde cero (ya vienen calculados en
+    df_source con el T_exp del vencimiento mas cercano); solo filtra y vuelve a
+    agregar por strike para ese subconjunto de DTE.
+    """
+    fallback = {
+        "cw1": spot_ref + 5, "cw2": spot_ref + 10, "cw3": spot_ref + 15,
+        "pw1": spot_ref - 5, "pw2": spot_ref - 10, "pw3": spot_ref - 15,
+        "zero_gamma": spot_ref, "net_gex_total": 0.0, "call_gex_sum": 0.0, "put_gex_sum": 0.0,
+        "net_dex_val": 0.0, "net_tex_val": 0.0, "net_vex_val": 0.0, "net_chex_val": 0.0, "net_vanna_val": 0.0,
+        "iv_str": "20.00%", "iv_rank_str": "N/A", "regime_str": "neutral regime",
+        "condition_str": "Neutral",
+    }
+
+    if df_source is None or df_source.empty or not exp_keys or 'exp_key' not in df_source.columns:
+        return fallback
+
+    df_sel = df_source[df_source['exp_key'].isin(exp_keys)].copy()
+    if df_sel.empty:
+        return fallback
+
+    agg_map = {}
+    for col in ['net_gex', 'call_gex', 'put_gex', 'openInterest_c', 'openInterest_p',
+                'net_dex', 'call_dex', 'put_dex', 'net_tex', 'net_vex', 'net_chex', 'net_vanna']:
+        if col in df_sel.columns:
+            agg_map[col] = 'sum'
+    for col in ['iv_c', 'iv_p']:
+        if col in df_sel.columns:
+            agg_map[col] = 'mean'
+
+    df_agg = df_sel.groupby('strike', as_index=False).agg(agg_map).sort_values('strike').reset_index(drop=True)
+
+    calls_dominant = df_agg[df_agg['net_gex'] > 0].sort_values('net_gex', ascending=False) if 'net_gex' in df_agg.columns else pd.DataFrame()
+    top_calls = calls_dominant['strike'].tolist()
+    cw1_v = top_calls[0] if len(top_calls) > 0 else spot_ref + 5
+    cw2_v = top_calls[1] if len(top_calls) > 1 else cw1_v + 2
+    cw3_v = top_calls[2] if len(top_calls) > 2 else cw2_v + 2
+
+    puts_dominant = df_agg[df_agg['net_gex'] < 0].sort_values('net_gex', ascending=True) if 'net_gex' in df_agg.columns else pd.DataFrame()
+    top_puts = puts_dominant['strike'].tolist()
+    pw1_v = top_puts[0] if len(top_puts) > 0 else spot_ref - 5
+    pw2_v = top_puts[1] if len(top_puts) > 1 else pw1_v - 2
+    pw3_v = top_puts[2] if len(top_puts) > 2 else pw2_v - 2
+
+    zero_gamma_v = spot_ref
+    if 'net_gex' in df_agg.columns and not df_agg.empty:
+        df_agg['cum_gex'] = df_agg['net_gex'].cumsum()
+        zg_idx = df_agg['cum_gex'].abs().idxmin()
+        if zg_idx in df_agg.index:
+            zero_gamma_v = df_agg.loc[zg_idx]['strike']
+
+    net_gex_total_v = float(df_agg['net_gex'].sum()) if 'net_gex' in df_agg.columns else 0.0
+    call_gex_sum_v = float(df_agg['call_gex'].sum()) if 'call_gex' in df_agg.columns else 0.0
+    put_gex_sum_v = float(df_agg['put_gex'].sum()) if 'put_gex' in df_agg.columns else 0.0
+
+    net_dex_v = float(df_agg['net_dex'].sum()) if 'net_dex' in df_agg.columns else 0.0
+    net_tex_v = float(df_agg['net_tex'].sum()) if 'net_tex' in df_agg.columns else 0.0
+    net_vex_v = float(df_agg['net_vex'].sum()) if 'net_vex' in df_agg.columns else 0.0
+    net_chex_v = float(df_agg['net_chex'].sum()) if 'net_chex' in df_agg.columns else 0.0
+    net_vanna_v = float(df_agg['net_vanna'].sum()) if 'net_vanna' in df_agg.columns else 0.0
+
+    valid_ivs = []
+    if spot_ref > 0:
+        near_atm = df_agg[abs(df_agg['strike'] - spot_ref) <= (spot_ref * 0.025)]
+        if not near_atm.empty:
+            for _, r in near_atm.iterrows():
+                if 'iv_c' in r and 0.02 < r.get('iv_c', 0) < 3.0: valid_ivs.append(r['iv_c'])
+                if 'iv_p' in r and 0.02 < r.get('iv_p', 0) < 3.0: valid_ivs.append(r['iv_p'])
+    atm_iv_v = float(np.median(valid_ivs)) if len(valid_ivs) > 0 else 0.20
+
+    regime_str_v = "positive regime" if net_gex_total_v >= 0 else "negative regime"
+    condition_str_v = ("Positive – dealers long gamma, hedging dampens volatility (mean-reverting)"
+                        if net_gex_total_v >= 0 else
+                        "Negative – dealers short gamma, hedging amplifies trending behavior")
+    iv_str_v = f"{atm_iv_v * 100:.2f}%"
+    iv_rank_str_v = f"{int(min(max((atm_iv_v / 0.35) * 100, 15), 85))}th percentile"
+
+    return {
+        "cw1": cw1_v, "cw2": cw2_v, "cw3": cw3_v, "pw1": pw1_v, "pw2": pw2_v, "pw3": pw3_v,
+        "zero_gamma": zero_gamma_v, "net_gex_total": net_gex_total_v,
+        "call_gex_sum": call_gex_sum_v, "put_gex_sum": put_gex_sum_v,
+        "net_dex_val": net_dex_v, "net_tex_val": net_tex_v, "net_vex_val": net_vex_v,
+        "net_chex_val": net_chex_v, "net_vanna_val": net_vanna_v,
+        "iv_str": iv_str_v, "iv_rank_str": iv_rank_str_v,
+        "regime_str": regime_str_v, "condition_str": condition_str_v,
+    }
 
 # --- WIDGET CHATBOT SIDEBAR ---
 st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
@@ -1437,30 +1718,55 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
 
     st.caption("Diagnóstico en vivo del mercado según VIX, perfiles GEX, Griegas y Escenarios A, B y C")
 
+    session_info = get_session_state()
+
     col_btn1, col_btn2, col_btn3 = st.columns(3)
-    if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
-        with st.spinner("Analizando pre-market..."):
-            res = consultar_ia(
-                tipo_analisis="Pre-Market",
-                mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando VIX, régimen de Gamma, niveles clave, Griegas y Escenarios A, B y C."
-            )
-            save_chat_message("assistant", res)
 
-    if col_btn2.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
-        with st.spinner("Analizando intradía..."):
-            res = consultar_ia(
-                tipo_analisis="Mercado Intradía",
-                mensaje_usuario="Genera el informe intradía evaluando lectura de VIX, flujo de Gamma, decaimiento por Charm/Vanna, Net Drift y Escenarios A, B y C."
-            )
-            save_chat_message("assistant", res)
+    with col_btn1:
+        if st.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
+            premarket_keys = find_exp_keys_by_date(df_curr, session_info["premarket_date_str"])
+            metrics_pm = compute_metrics_for_dte(df_curr, premarket_keys, spot_price)
+            with st.spinner("Analizando pre-market..."):
+                res = consultar_ia(
+                    tipo_analisis="Pre-Market",
+                    mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando VIX, régimen de Gamma, niveles clave, Griegas y Escenarios A, B y C.",
+                    metrics_override=metrics_pm,
+                    dte_context_label=f"sesión próxima del {session_info['premarket_date_str']}"
+                )
+                save_chat_message("assistant", res)
+        st.caption("🕒 Sesión próxima")
 
-    if col_btn3.button("🧠 Análisis", key="btn_ai_analisis", use_container_width=True):
-        with st.spinner("Procesando análisis completo..."):
-            res = consultar_ia(
-                tipo_analisis="Análisis Estratégico",
-                mensaje_usuario="Proporciona el Diagnóstico Estratégico completo con niveles exactos, VIX y Escenarios A, B y C de trading."
-            )
-            save_chat_message("assistant", res)
+    with col_btn2:
+        if st.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
+            intraday_keys = find_exp_keys_by_date(df_curr, today_date_str)
+            metrics_id = compute_metrics_for_dte(df_curr, intraday_keys, spot_price)
+            with st.spinner("Analizando intradía..."):
+                res = consultar_ia(
+                    tipo_analisis="Mercado Intradía",
+                    mensaje_usuario="Genera el informe intradía evaluando lectura de VIX, flujo de Gamma, decaimiento por Charm/Vanna, Net Drift y Escenarios A, B y C.",
+                    metrics_override=metrics_id,
+                    dte_context_label=f"sesión actual del {today_date_str}"
+                )
+                save_chat_message("assistant", res)
+        st.caption("🟢 Sesión actual" if session_info["intraday_active"] else "⚪ No hay sesión actual")
+
+    with col_btn3:
+        if st.button("🧠 Análisis", key="btn_ai_analisis", use_container_width=True):
+            analisis_keys = st.session_state.get("selected_dte_keys_chat_analisis", [])
+            metrics_an = compute_metrics_for_dte(df_curr, analisis_keys, spot_price)
+            with st.spinner("Procesando análisis completo..."):
+                res = consultar_ia(
+                    tipo_analisis="Análisis Estratégico",
+                    mensaje_usuario="Proporciona el Diagnóstico Estratégico completo con niveles exactos, VIX y Escenarios A, B y C de trading.",
+                    metrics_override=metrics_an,
+                    dte_context_label=", ".join(analisis_keys) if analisis_keys else None
+                )
+                save_chat_message("assistant", res)
+        render_dte_selector(
+            df_curr, location_key="chat_analisis",
+            state_key="selected_dte_keys_chat_analisis",
+            use_popover=True, popover_label="📂 DTE"
+        )
 
     st.markdown("---")
 
@@ -1570,97 +1876,6 @@ def export_snapshot_throttled():
 
 export_snapshot_throttled()
 
-def render_dte_selector(df_source, location_key):
-    """
-    Renderiza el selector de DTE (boton "DTE" + botones rapidos + multiselect).
-    Queda sincronizado globalmente via st.session_state.selected_dte_keys:
-    si se cambia el DTE en cualquier pestana donde se llame esta funcion,
-    cambia tambien en todas las demas. 'location_key' debe ser unico por
-    cada lugar donde se invoque (ej: 'gex', 'grk') para no chocar los keys
-    internos de Streamlit.
-    """
-    df_filtered = df_source.copy()
-
-    if df_source.empty or 'exp_key' not in df_source.columns:
-        return df_filtered
-
-    col_dte_box, _ = st.columns([1, 3])
-    with col_dte_box:
-        with st.expander("📂 DTE", expanded=False):
-            exp_groups = []
-            for exp_k, group in df_source.groupby('exp_key'):
-                d_str = group['exp_date'].iloc[0] if 'exp_date' in group.columns else exp_k.split(':')[0]
-                dte_v = int(group['dte'].iloc[0]) if 'dte' in group.columns else 0
-                net_gex_v = group['net_gex'].sum() if 'net_gex' in group.columns else 0.0
-
-                try:
-                    dt_obj = datetime.strptime(d_str, "%Y-%m-%d")
-                    formatted_date = dt_obj.strftime("%d %b %Y").upper()
-                except Exception:
-                    formatted_date = d_str
-
-                color_icon = "🟢" if net_gex_v >= 0 else "🔴"
-                formatted_val = fmt_val(net_gex_v)
-
-                exp_groups.append({
-                    'exp_key': exp_k,
-                    'date_formatted': formatted_date,
-                    'dte': dte_v,
-                    'net_gex': net_gex_v,
-                    'label': f"{formatted_date} {dte_v}DTE | {color_icon} {formatted_val}"
-                })
-
-            exp_df = pd.DataFrame(exp_groups).sort_values('dte').reset_index(drop=True)
-
-            if 'selected_dte_keys' not in st.session_state or not st.session_state.selected_dte_keys:
-                st.session_state.selected_dte_keys = [exp_df['exp_key'].iloc[0]] if not exp_df.empty else []
-
-            col_b1, col_b2, col_b3, col_b4 = st.columns(4)
-            if col_b1.button("0 DTE Only", key=f"btn_0dte_{location_key}"):
-                st.session_state.selected_dte_keys = [exp_df[exp_df['dte'] == 0]['exp_key'].iloc[0]] if not exp_df[exp_df['dte'] == 0].empty else [exp_df['exp_key'].iloc[0]]
-                st.rerun()
-            if col_b2.button("<= 7 DTE", key=f"btn_7dte_{location_key}"):
-                st.session_state.selected_dte_keys = exp_df[exp_df['dte'] <= 7]['exp_key'].tolist()
-                st.rerun()
-            if col_b3.button("<= 30 DTE", key=f"btn_30dte_{location_key}"):
-                st.session_state.selected_dte_keys = exp_df[exp_df['dte'] <= 30]['exp_key'].tolist()
-                st.rerun()
-            if col_b4.button("TODAS LAS DTE", key=f"btn_all_dte_{location_key}"):
-                st.session_state.selected_dte_keys = exp_df['exp_key'].tolist()
-                st.rerun()
-
-            options_list = exp_df['exp_key'].tolist()
-            labels_dict = dict(zip(exp_df['exp_key'], exp_df['label']))
-
-            # Sincroniza este widget con el estado global ANTES de crearlo, para
-            # que los cambios hechos desde la otra pestana se reflejen aqui tambien.
-            widget_key = f"multiselect_dte_{location_key}"
-            valid_selection = [k for k in st.session_state.selected_dte_keys if k in options_list]
-            if st.session_state.get(widget_key) != valid_selection:
-                st.session_state[widget_key] = valid_selection
-
-            selected_keys = st.multiselect(
-                "Selecciona las expiraciones activas para el gráfico:",
-                options=options_list,
-                format_func=lambda x: labels_dict.get(x, x),
-                key=widget_key
-            )
-            st.session_state.selected_dte_keys = selected_keys
-
-    if st.session_state.selected_dte_keys:
-        agg_map = {
-            'net_gex': 'sum', 'call_gex': 'sum', 'put_gex': 'sum',
-            'openInterest_c': 'sum', 'openInterest_p': 'sum'
-        }
-        for extra_col in ['net_dex', 'call_dex', 'put_dex', 'net_tex', 'net_vex', 'net_chex', 'net_vanna']:
-            if extra_col in df_source.columns:
-                agg_map[extra_col] = 'sum'
-
-        df_filtered = df_source[df_source['exp_key'].isin(st.session_state.selected_dte_keys)]
-        df_filtered = df_filtered.groupby('strike', as_index=False).agg(agg_map)
-
-    return df_filtered
-
 # --- PESTAÑAS PRINCIPALES ---
 tab_gex, tab_live, tab_drift, tab_greeks, tab_back, tab_data = st.tabs([
     "GEX INFO",
@@ -1674,8 +1889,6 @@ tab_gex, tab_live, tab_drift, tab_greeks, tab_back, tab_data = st.tabs([
 # --- 1. GEX INFO ---
 with tab_gex:
     df_gex_filtered = render_dte_selector(df_curr, "gex")
-
-    sub_gex1, sub_gex2 = st.tabs(["NET GEX PROFILE", "CALLS vs PUTS"])
 
     sub_gex1, sub_gex2 = st.tabs(["NET GEX PROFILE", "CALLS vs PUTS"])
     
@@ -2039,12 +2252,20 @@ with tab_data:
         </div>
     """, unsafe_allow_html=True)
 
-    col_diag_btn, col_diag_space = st.columns([3.5, 6.5])
+    col_diag_btn, col_diag_dte, col_diag_space = st.columns([3.5, 1.5, 5.0])
     with col_diag_btn:
         btn_gen_diag = st.button("🤖 GENERAR DIAGNÓSTICO DE MERCADO (IA)", key="btn_data_ia_diag", use_container_width=True)
+    with col_diag_dte:
+        render_dte_selector(
+            df_curr, location_key="data_diag",
+            state_key="selected_dte_keys_data",
+            use_popover=True, popover_label="📂 DTE"
+        )
 
     if btn_gen_diag or st.session_state.get("data_ia_diag_result"):
         if btn_gen_diag:
+            diag_keys = st.session_state.get("selected_dte_keys_data", [])
+            metrics_diag = compute_metrics_for_dte(df_curr, diag_keys, spot_price)
             with st.spinner("Procesando análisis profundo y generando Escenarios A, B y C..."):
                 prompt_diag = (
                     f"Genera un Diagnóstico de Mercado e informe táctico completo para {ticker_symbol} "
@@ -2053,7 +2274,12 @@ with tab_data:
                     f"y OBLIGATORIAMENTE los Escenarios A (Continuación / Retesteo Aceptado), B (Rechazo en Nivel Clave) y "
                     f"C (Trampa / Falsa Ruptura - Liquidity Sweep) especificando los precios numéricos exactos de entrada y objetivo."
                 )
-                diag_output = consultar_ia(tipo_analisis="Diagnóstico Data Summary", mensaje_usuario=prompt_diag)
+                diag_output = consultar_ia(
+                    tipo_analisis="Diagnóstico Data Summary",
+                    mensaje_usuario=prompt_diag,
+                    metrics_override=metrics_diag,
+                    dte_context_label=", ".join(diag_keys) if diag_keys else None
+                )
                 st.session_state["data_ia_diag_result"] = diag_output
 
         if "data_ia_diag_result" in st.session_state:
