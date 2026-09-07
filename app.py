@@ -545,6 +545,7 @@ refresh_interval = st.sidebar.select_slider(
 )
 
 if auto_refresh:
+    st.sidebar.caption(f"⏱️ ÚLTIMA ACTUALIZACIÓN: {now_tz.strftime('%H:%M:%S')}")
     try:
         from streamlit_autorefresh import st_autorefresh
         st_autorefresh(interval=refresh_interval * 1000, key="gex_auto_refresh")
