@@ -1998,7 +1998,7 @@ with tab_gex:
                     title=dict(text="<b>Strike Profile (Net Gamma Exposure)</b>", font=dict(family="Plus Jakarta Sans", size=15, color="#F0F6FC")),
                     xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono", color="#8B949E"), zeroline=False, **xaxis_kwargs),
                     yaxis=dict(title="Net GEX ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono", color="#8B949E"), zeroline=True, zerolinecolor="rgba(255,255,255,0.15)", zerolinewidth=1, range=[y_min_adj, y_max_adj]),
-                    height=980, margin=dict(l=50, r=40, t=50, b=40)
+                    height=710, margin=dict(l=50, r=40, t=50, b=40)
                 )
                 st.plotly_chart(fig1, use_container_width=True)
 
@@ -2031,7 +2031,7 @@ with tab_gex:
                     barmode='relative',
                     xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono"), **xaxis_kwargs),
                     yaxis=dict(title="Gamma Exposure ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono"), range=[y_min_adj, y_max_adj]),
-                    height=560, margin=dict(l=50, r=40, t=50, b=40)
+                    height=710, margin=dict(l=50, r=40, t=50, b=40)
                 )
                 st.plotly_chart(fig2, use_container_width=True)
 
