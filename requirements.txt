@@ -8,3 +8,4 @@ google-genai
 supabase
 groq
 extra-streamlit-components 
+streamlit-autorefresh
