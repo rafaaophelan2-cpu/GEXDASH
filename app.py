@@ -1066,7 +1066,7 @@ if not df_curr.empty and exp_0dte is not None and spot_price > 0:
     atm_iv = float(np.median(valid_ivs)) if len(valid_ivs) > 0 else 0.20
     atm_iv = max(atm_iv, 0.08)
 
-    calls_dominant = df_curr[df_curr['net_gex'] > 0].sort_values('net_gex', ascending=False)
+    df_curr = recalculate_gex_for_spot(df_curr, spot_price, T_exp, atm_iv)
 
     df_curr['call_dex'] = df_curr['delta_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
     df_curr['put_dex'] = df_curr['delta_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
