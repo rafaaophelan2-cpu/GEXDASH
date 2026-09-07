@@ -1259,6 +1259,58 @@ if not jsonbin_history_data and not latest_supabase_snap:
     jsonbin_history_data = {mock_date: mock_snaps}
 
 # --- MOTOR DE ANÁLISIS DEDICADO E IA CON ESCENARIOS Y VIX ---
+def compute_dte_metrics(df_source, selected_dtes=None):
+    if df_source.empty:
+        return {
+            "net_gex": net_gex_total, "call_gex": call_gex_sum, "put_gex": put_gex_sum, "total_gex": total_gex,
+            "cw1": cw1, "cw2": cw2, "cw3": cw3, "pw1": pw1, "pw2": pw2, "pw3": pw3, "zg": zero_gamma,
+            "dex": net_dex_total, "tex": net_tex_total, "vex": net_vex_total, "chex": net_chex_total, "vanna": net_vanna_total
+        }
+    df_sub = df_source.copy()
+    if selected_dtes and 'exp_key' in df_sub.columns:
+        if isinstance(selected_dtes, str):
+            selected_dtes = [selected_dtes]
+        df_sub = df_sub[df_sub['exp_key'].isin(selected_dtes)]
+        if df_sub.empty:
+            df_sub = df_source.copy()
+            
+    net_gex_tot = float(df_sub['net_gex'].sum()) if 'net_gex' in df_sub.columns else 0.0
+    call_gex_tot = float(df_sub['call_gex'].sum()) if 'call_gex' in df_sub.columns else 0.0
+    put_gex_tot = float(df_sub['put_gex'].sum()) if 'put_gex' in df_sub.columns else 0.0
+    total_gex_tot = float((df_sub['call_gex'].abs() + df_sub['put_gex'].abs()).sum()) if 'call_gex' in df_sub.columns else 0.0
+    
+    calls_dom = df_sub[df_sub['net_gex'] > 0].sort_values('net_gex', ascending=False) if 'net_gex' in df_sub.columns else pd.DataFrame()
+    top_c = calls_dom['strike'].tolist() if not calls_dom.empty else []
+    cw1_v = top_c[0] if len(top_c) > 0 else spot_price + 5
+    cw2_v = top_c[1] if len(top_c) > 1 else cw1_v + 2
+    cw3_v = top_c[2] if len(top_c) > 2 else cw2_v + 2
+
+    puts_dom = df_sub[df_sub['net_gex'] < 0].sort_values('net_gex', ascending=True) if 'net_gex' in df_sub.columns else pd.DataFrame()
+    top_p = puts_dom['strike'].tolist() if not puts_dom.empty else []
+    pw1_v = top_p[0] if len(top_p) > 0 else spot_price - 5
+    pw2_v = top_p[1] if len(top_p) > 1 else pw1_v - 2
+    pw3_v = top_p[2] if len(top_p) > 2 else pw2_v - 2
+
+    df_sub_sorted = df_sub.groupby('strike', as_index=False)['net_gex'].sum().sort_values('strike') if 'net_gex' in df_sub.columns else pd.DataFrame()
+    if not df_sub_sorted.empty:
+        df_sub_sorted['cum_gex'] = df_sub_sorted['net_gex'].cumsum()
+        zg_idx = (df_sub_sorted['cum_gex'].abs()).idxmin()
+        zg_v = float(df_sub_sorted.loc[zg_idx, 'strike'])
+    else:
+        zg_v = spot_price
+
+    net_dex_v = float(df_sub['net_dex'].sum()) if 'net_dex' in df_sub.columns else 0.0
+    net_tex_v = float(df_sub['net_tex'].sum()) if 'net_tex' in df_sub.columns else 0.0
+    net_vex_v = float(df_sub['net_vex'].sum()) if 'net_vex' in df_sub.columns else 0.0
+    net_chex_v = float(df_sub['net_chex'].sum()) if 'net_chex' in df_sub.columns else 0.0
+    net_vanna_v = float(df_sub['net_vanna'].sum()) if 'net_vanna' in df_sub.columns else 0.0
+
+    return {
+        "net_gex": net_gex_tot, "call_gex": call_gex_tot, "put_gex": put_gex_tot, "total_gex": total_gex_tot,
+        "cw1": cw1_v, "cw2": cw2_v, "cw3": cw3_v, "pw1": pw1_v, "pw2": pw2_v, "pw3": pw3_v, "zg": zg_v,
+        "dex": net_dex_v, "tex": net_tex_v, "vex": net_vex_v, "chex": net_chex_v, "vanna": net_vanna_v
+    }
+
 def generar_analisis_local(ticker, spot, net_gex, regime, condition,
                           call_gex, put_gex, total_gex,
                           cw1_v, cw2_v, cw3_v, pw1_v, pw2_v, pw3_v, zg_v,
@@ -1348,12 +1400,11 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
   - **Barrido Inferior**: Falsa ruptura de PW1 cayendo hasta **${sweep_low:.2f} USD** para activar stops de compradores y revertir velozmente por encima de ${pw1_v:.0f} USD. **Precio Numérico de Reversión Esperado**: ${rev_target_low:.2f} USD.
 """
 
-def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
-    net_dex_val = float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0
-    net_tex_val = float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0
-    net_vex_val = float(df_curr['net_vex'].sum()) if not df_curr.empty and 'net_vex' in df_curr.columns else 0.0
-    net_chex_val = float(df_curr['net_chex'].sum()) if not df_curr.empty and 'net_chex' in df_curr.columns else 0.0
-    net_vanna_val = float(df_curr['net_vanna'].sum()) if not df_curr.empty and 'net_vanna' in df_curr.columns else 0.0
+def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None, selected_dtes=None):
+    m = compute_dte_metrics(df_curr, selected_dtes)
+    
+    local_regime = "positive regime" if m["net_gex"] >= 0 else "negative regime"
+    local_condition = "Positive – dealers long gamma, hedging dampens volatility (mean-reverting)" if m["net_gex"] >= 0 else "Negative – dealers short gamma, hedging amplifies trending behavior"
 
     system_prompt = f"""
     Eres un analista cuantitativo institucional experto en opciones y estratega de mercado en el GEX Quant Terminal.
@@ -1363,13 +1414,13 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
     - Ticker: {ticker_symbol} | Spot Price: {spot_price:.2f} USD | Ratio NQ: {conversion_ratio:.4f}
     - Índice VIX: {vix_val:.2f} ({vix_status} - {vix_desc})
     - Volatilidad Implícita (IV ATM): {iv_str} | Percentil Rank: {iv_rank_str}
-    - Régimen de Gamma: {regime_str} ({condition_str})
-    - Net GEX Total: {fmt_val(net_gex_total).replace('$', '')} USD (Call GEX: {fmt_val(call_gex_sum).replace('$', '')} USD, Put GEX: {fmt_val(put_gex_sum).replace('$', '')} USD)
-    - Call Walls (Resistencias): CW1={cw1:.0f} USD, CW2={cw2:.0f} USD, CW3={cw3:.0f} USD
-    - Put Walls (Soportes): PW1={pw1:.0f} USD, PW2={pw2:.0f} USD, PW3={pw3:.0f} USD
-    - Zero Gamma Level (Flip): {zero_gamma:.2f} USD
-    - Delta Exposure (DEX): {net_dex_val:.2f}M USD | Theta Exposure (TEX): {net_tex_val:,.0f} USD/día
-    - Vega Exposure (VEX): {net_vex_val:,.0f} USD/1% IV | Charm Exposure (CHEX): {net_chex_val:.2f}M USD/día | Vanna (VANNA): {net_vanna_val:.2f}M USD
+    - Régimen de Gamma: {local_regime} ({local_condition})
+    - Net GEX Total: {fmt_val(m['net_gex']).replace('$', '')} USD (Call GEX: {fmt_val(m['call_gex']).replace('$', '')} USD, Put GEX: {fmt_val(m['put_gex']).replace('$', '')} USD)
+    - Call Walls (Resistencias): CW1={m['cw1']:.0f} USD, CW2={m['cw2']:.0f} USD, CW3={m['cw3']:.0f} USD
+    - Put Walls (Soportes): PW1={m['pw1']:.0f} USD, PW2={m['pw2']:.0f} USD, PW3={m['pw3']:.0f} USD
+    - Zero Gamma Level (Flip): {m['zg']:.2f} USD
+    - Delta Exposure (DEX): {m['dex']:.2f}M USD | Theta Exposure (TEX): {m['tex']:,.0f} USD/día
+    - Vega Exposure (VEX): {m['vex']:,.0f} USD/1% IV | Charm Exposure (CHEX): {m['chex']:.2f}M USD/día | Vanna (VANNA): {m['vanna']:.2f}M USD
     - Net Premium Drift: {fmt_val(last_net_drift).replace('$', '')} USD
 
     REGLAS DE INTERPRETACIÓN DEL VIX:
@@ -1384,8 +1435,8 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
        **2. Puntos Clave de Inflexión y Niveles Operativos**
        **3. Análisis de Flujo y Griegas (DEX, VEX, CHEX, VANNA, Net Drift)**
        **4. Escenarios Operativos Cuantitativos (DETALLAR DE MANERA OBLIGATORIA CON PRECIOS EXACTOS):**
-          * **Escenario A (Continuación / Retesteo Aceptado)**: Detalla el comportamiento si el precio rompe y sostiene un nivel clave (CW1={cw1:.0f} o PW1={pw1:.0f}), especificando los precios exactos de entrada y objetivo.
-          * **Escenario B (Rechazo en Nivel Clave)**: Detalla qué ocurre al rebotar o ser rechazado en la resistencia/soporte principal (CW1 o PW1), con sus precios reales de entrada y objetivos hacia Zero Gamma ({zero_gamma:.2f}).
+          * **Escenario A (Continuación / Retesteo Aceptado)**: Detalla el comportamiento si el precio rompe y sostiene un nivel clave (CW1={m['cw1']:.0f} o PW1={m['pw1']:.0f}), especificando los precios exactos de entrada y objetivo.
+          * **Escenario B (Rechazo en Nivel Clave)**: Detalla qué ocurre al rebotar o ser rechazado en la resistencia/soporte principal (CW1 o PW1), con sus precios reales de entrada y objetivos hacia Zero Gamma ({m['zg']:.2f}).
           * **Escenario C (Trampa / Falsa Ruptura)**: Detalla la maniobra de barrido de liquidez (falsa ruptura por encima de CW1 o debajo de PW1) y el precio numérico de reversión esperado.
     3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$). Usa fuentes y letras normales en USD.
     """
@@ -1412,11 +1463,11 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None):
             log_to_console("Gemini AI Engine", str(e_gemini))
 
     return generar_analisis_local(
-        ticker_symbol, spot_price, net_gex_total, regime_str, condition_str,
-        call_gex_sum, put_gex_sum, total_gex,
-        cw1, cw2, cw3, pw1, pw2, pw3, zero_gamma,
-        iv_str, iv_rank_str, net_dex_val, net_tex_val, net_vex_val,
-        net_chex_val, net_vanna_val, last_net_drift, vix_val
+        ticker_symbol, spot_price, m['net_gex'], local_regime, local_condition,
+        m['call_gex'], m['put_gex'], m['total_gex'],
+        m['cw1'], m['cw2'], m['cw3'], m['pw1'], m['pw2'], m['pw3'], m['zg'],
+        iv_str, iv_rank_str, m['dex'], m['tex'], m['vex'],
+        m['chex'], m['vanna'], last_net_drift, vix_val
     )
 
 # --- WIDGET CHATBOT SIDEBAR ---
@@ -1437,30 +1488,70 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
 
     st.caption("Diagnóstico en vivo del mercado según VIX, perfiles GEX, Griegas y Escenarios A, B y C")
 
+    available_dtes = []
+    if not df_curr.empty and 'exp_key' in df_curr.columns:
+        for exp_k, group in df_curr.groupby('exp_key'):
+            d_str = group['exp_date'].iloc[0] if 'exp_date' in group.columns else exp_k.split(':')[0]
+            dte_v = int(group['dte'].iloc[0]) if 'dte' in group.columns else 0
+            available_dtes.append({'exp_key': exp_k, 'dte': dte_v, 'date': d_str})
+        available_dtes = sorted(available_dtes, key=lambda x: x['dte'])
+
     col_btn1, col_btn2, col_btn3 = st.columns(3)
-    if col_btn1.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
-        with st.spinner("Analizando pre-market..."):
-            res = consultar_ia(
-                tipo_analisis="Pre-Market",
-                mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando VIX, régimen de Gamma, niveles clave, Griegas y Escenarios A, B y C."
-            )
-            save_chat_message("assistant", res)
+    
+    with col_btn1:
+        btn_pre = st.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True)
+        st.markdown("<p style='text-align:center; font-size:0.68rem; color:#8B949E; margin-top:-6px; font-weight:600;'>DTE siguiente</p>", unsafe_allow_html=True)
+        if btn_pre:
+            with st.spinner("Analizando Pre-Market..."):
+                next_dte_keys = [available_dtes[0]['exp_key']] if available_dtes else None
+                res = consultar_ia(
+                    tipo_analisis="Pre-Market",
+                    mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando VIX, régimen de Gamma, niveles clave, Griegas y Escenarios A, B y C.",
+                    selected_dtes=next_dte_keys
+                )
+                save_chat_message("assistant", res)
 
-    if col_btn2.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
-        with st.spinner("Analizando intradía..."):
-            res = consultar_ia(
-                tipo_analisis="Mercado Intradía",
-                mensaje_usuario="Genera el informe intradía evaluando lectura de VIX, flujo de Gamma, decaimiento por Charm/Vanna, Net Drift y Escenarios A, B y C."
-            )
-            save_chat_message("assistant", res)
+    with col_btn2:
+        btn_intra = st.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True)
+        st.markdown("<p style='text-align:center; font-size:0.68rem; color:#8B949E; margin-top:-6px; font-weight:600;'>Sesión Actual</p>", unsafe_allow_html=True)
+        if btn_intra:
+            cur_time = now_tz.time()
+            open_t = datetime.strptime("08:30", "%H:%M").time()
+            close_t = datetime.strptime("16:00", "%H:%M").time()
+            is_active_session = (now_tz.weekday() < 5) and (open_t <= cur_time <= close_t)
+            
+            if not is_active_session:
+                msg_inactive = "No hay ninguna sesión activa en este momento"
+                save_chat_message("assistant", msg_inactive)
+            else:
+                with st.spinner("Analizando Intradía..."):
+                    current_dte_keys = [available_dtes[0]['exp_key']] if available_dtes else None
+                    res = consultar_ia(
+                        tipo_analisis="Mercado Intradía",
+                        mensaje_usuario="Genera el informe intradía evaluando lectura de VIX, flujo de Gamma, decaimiento por Charm/Vanna, Net Drift y Escenarios A, B y C.",
+                        selected_dtes=current_dte_keys
+                    )
+                    save_chat_message("assistant", res)
 
-    if col_btn3.button("🧠 Análisis", key="btn_ai_analisis", use_container_width=True):
-        with st.spinner("Procesando análisis completo..."):
-            res = consultar_ia(
-                tipo_analisis="Análisis Estratégico",
-                mensaje_usuario="Proporciona el Diagnóstico Estratégico completo con niveles exactos, VIX y Escenarios A, B y C de trading."
-            )
-            save_chat_message("assistant", res)
+    with col_btn3:
+        btn_ana = st.button("🧠 Análisis", key="btn_ai_analisis", use_container_width=True)
+        dte_opts = [item['exp_key'] for item in available_dtes] if available_dtes else ["0DTE"]
+        dte_labels = {item['exp_key']: f"{item['dte']} DTE ({item['date']})" for item in available_dtes} if available_dtes else {}
+        selected_ana_dte = st.selectbox(
+            "DTE Análisis",
+            options=dte_opts,
+            format_func=lambda x: dte_labels.get(x, x),
+            key="sb_dte_chatbot_analisis",
+            label_visibility="collapsed"
+        )
+        if btn_ana:
+            with st.spinner("Procesando análisis completo..."):
+                res = consultar_ia(
+                    tipo_analisis="Análisis Estratégico",
+                    mensaje_usuario=f"Proporciona el Diagnóstico Estratégico completo con niveles exactos, VIX y Escenarios A, B y C de trading para el DTE seleccionado ({dte_labels.get(selected_ana_dte, selected_ana_dte)}).",
+                    selected_dtes=[selected_ana_dte]
+                )
+                save_chat_message("assistant", res)
 
     st.markdown("---")
 
@@ -1874,16 +1965,18 @@ with tab_drift:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- 4. GREEKS (GRIEGAS) ---
+# --- 4. GREEKS ---
 with tab_greeks:
-    st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📊 PERFILES DE EXPOSICIÓN DE GRIEGAS</h3>", unsafe_allow_html=True)
-
-    c_dex = "#10B981" if net_dex_total >= 0 else "#EF4444"
-    c_tex = "#10B981" if net_tex_total >= 0 else "#EF4444"
-    c_vex = "#10B981" if net_vex_total >= 0 else "#EF4444"
-    c_chex = "#10B981" if net_chex_total >= 0 else "#EF4444"
-    c_vanna = "#10B981" if net_vanna_total >= 0 else "#EF4444"
+    df_greeks_filtered = df_curr.copy()
+    if 'selected_dte_keys' in st.session_state and st.session_state.selected_dte_keys:
+        df_greeks_filtered = df_curr[df_curr['exp_key'].isin(st.session_state.selected_dte_keys)]
+        df_greeks_filtered = df_greeks_filtered.groupby('strike', as_index=False).agg({
+            'net_dex': 'sum', 'call_dex': 'sum', 'put_dex': 'sum',
+            'net_tex': 'sum', 'call_tex': 'sum', 'put_tex': 'sum',
+            'net_vex': 'sum', 'call_vex': 'sum', 'put_vex': 'sum',
+            'net_chex': 'sum', 'call_chex': 'sum', 'put_chex': 'sum',
+            'net_vanna': 'sum', 'call_vanna': 'sum', 'put_vanna': 'sum'
+        })
 
     g1, g2, g3, g4, g5 = st.columns(5)
     g1.markdown(f'<div class="metric-card"><div class="metric-label">Net Delta (DEX)</div><div class="metric-value" style="color:{c_dex};">${net_dex_total:.2f}M</div><div class="metric-sub">Delta Exposure</div></div>', unsafe_allow_html=True)
@@ -2007,27 +2100,52 @@ with tab_data:
         </div>
     """, unsafe_allow_html=True)
 
-    col_diag_btn, col_diag_space = st.columns([3.5, 6.5])
-    with col_diag_btn:
+    # Procesamiento de DTEs disponibles para el selector individual
+    available_dtes_data = []
+    if not df_curr.empty and 'exp_key' in df_curr.columns:
+        for exp_k, group in df_curr.groupby('exp_key'):
+            d_str = group['exp_date'].iloc[0] if 'exp_date' in group.columns else exp_k.split(':')[0]
+            dte_v = int(group['dte'].iloc[0]) if 'dte' in group.columns else 0
+            available_dtes_data.append({'exp_key': exp_k, 'dte': dte_v, 'date': d_str})
+        available_dtes_data = sorted(available_dtes_data, key=lambda x: x['dte'])
+
+    dte_data_opts = [item['exp_key'] for item in available_dtes_data] if available_dtes_data else ["0DTE"]
+    dte_data_labels = {item['exp_key']: f"{item['dte']} DTE ({item['date']})" for item in available_dtes_data} if available_dtes_data else {}
+
+    col_btn_diag, col_dte_diag = st.columns([2.5, 1.5])
+    
+    with col_dte_diag:
+        selected_dte_individual = st.selectbox(
+            "DTE Diagnóstico IA",
+            options=dte_data_opts,
+            format_func=lambda x: dte_data_labels.get(x, x),
+            key="sb_dte_individual_data"
+        )
+
+    with col_btn_diag:
         btn_gen_diag = st.button("🤖 GENERAR DIAGNÓSTICO DE MERCADO (IA)", key="btn_data_ia_diag", use_container_width=True)
 
-    if btn_gen_diag or st.session_state.get("data_ia_diag_result"):
-        if btn_gen_diag:
-            with st.spinner("Procesando análisis profundo y generando Escenarios A, B y C..."):
-                prompt_diag = (
-                    f"Genera un Diagnóstico de Mercado e informe táctico completo para {ticker_symbol} "
-                    f"con base en el resumen de datos actual. Incluye un análisis exhaustivo del impacto del VIX en {vix_val:.2f}, "
-                    f"el comportamiento esperado según el régimen de Gamma, el desglose de Griegas (DEX, TEX, VEX, CHEX, VANNA) "
-                    f"y OBLIGATORIAMENTE los Escenarios A (Continuación / Retesteo Aceptado), B (Rechazo en Nivel Clave) y "
-                    f"C (Trampa / Falsa Ruptura - Liquidity Sweep) especificando los precios numéricos exactos de entrada y objetivo."
-                )
-                diag_output = consultar_ia(tipo_analisis="Diagnóstico Data Summary", mensaje_usuario=prompt_diag)
-                st.session_state["data_ia_diag_result"] = diag_output
+    if btn_gen_diag:
+        with st.spinner("Procesando análisis profundo y generando Escenarios A, B y C..."):
+            prompt_diag = (
+                f"Genera un Diagnóstico de Mercado e informe táctico completo para {ticker_symbol} "
+                f"evaluando el DTE {dte_data_labels.get(selected_dte_individual, selected_dte_individual)}. "
+                f"Incluye un análisis exhaustivo del impacto del VIX en {vix_val:.2f}, "
+                f"el comportamiento esperado según el régimen de Gamma, el desglose de Griegas (DEX, TEX, VEX, CHEX, VANNA) "
+                f"y OBLIGATORIAMENTE los Escenarios A (Continuación / Retesteo Aceptado), B (Rechazo en Nivel Clave) y "
+                f"C (Trampa / Falsa Ruptura - Liquidity Sweep) especificando los precios numéricos exactos de entrada y objetivo."
+            )
+            diag_output = consultar_ia(
+                tipo_analisis="Diagnóstico Data Summary", 
+                mensaje_usuario=prompt_diag,
+                selected_dtes=[selected_dte_individual]
+            )
+            st.session_state["data_ia_diag_result"] = diag_output
 
-        if "data_ia_diag_result" in st.session_state:
-            st.markdown("<div style='margin-top: 15px; padding: 18px; background: rgba(14, 19, 31, 0.95); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 10px;'>", unsafe_allow_html=True)
-            st.markdown(st.session_state["data_ia_diag_result"])
-            st.markdown("</div>", unsafe_allow_html=True)
+    if st.session_state.get("data_ia_diag_result"):
+        st.markdown("<div style='margin-top: 15px; padding: 18px; background: rgba(14, 19, 31, 0.95); border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 10px;'>", unsafe_allow_html=True)
+        st.markdown(st.session_state["data_ia_diag_result"])
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<hr style='border-color:rgba(255,255,255,0.08); margin: 25px 0;'>", unsafe_allow_html=True)
     st.markdown("<h4 style='font-family:\"Plus Jakarta Sans\"; font-weight:700; color:#F0F6FC;'>📊 Cadena de Opciones y Exposición Cuantitativa por Strike</h4>", unsafe_allow_html=True)
