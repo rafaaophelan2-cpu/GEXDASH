@@ -1723,8 +1723,14 @@ with tab_drift:
         fig_drift.add_trace(go.Scatter(x=full_timestamps, y=closes_drift, mode='lines', name=ticker_symbol, line=dict(color='#3B82F6', width=2)), row=1, col=1, secondary_y=True)
         fig_drift.add_trace(go.Scatter(x=full_timestamps, y=vols_drift, mode='lines', name='Volume', line=dict(color='#10B981', width=1.5), fill='tozeroy', fillcolor='rgba(16, 185, 129, 0.25)'), row=2, col=1)
 
-        fig_drift.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', showlegend=False, height=650, margin=dict(l=60, r=60, t=30, b=30), hovermode="x unified")
-        st.plotly_chart(fig_drift, use_container_width=True)
+        fig_drift.update_xaxes(matches='x', showgrid=True, gridcolor="rgba(255,255,255,0.05)")
+        fig_drift.update_yaxes(fixedrange=False, showgrid=True, gridcolor="rgba(255,255,255,0.05)")
+        fig_drift.update_layout(
+            template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+            showlegend=False, height=650, margin=dict(l=60, r=60, t=30, b=30),
+            hovermode="x unified", dragmode='pan', uirevision="static_user_state"
+        )
+        st.plotly_chart(fig_drift, use_container_width=True, config={'scrollZoom': True}, key="net_drift_chart")
         
     st.markdown('</div>', unsafe_allow_html=True)
 
