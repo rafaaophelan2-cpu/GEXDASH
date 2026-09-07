@@ -1979,8 +1979,17 @@ with tab_greeks:
         })
 
     g1, g2, g3, g4, g5 = st.columns(5)
+    c_tex = "#10B981" if net_tex_total >= 0 else "#EF4444"
     c_dex = "#10B981" if net_dex_total >= 0 else "#EF4444"
     g1.markdown(f'<div class="metric-card"><div class="metric-label">Net Delta (DEX)</div><div class="metric-value" style="color:{c_dex};">${net_dex_total:.2f}M</div><div class="metric-sub">Delta Exposure</div></div>', unsafe_allow_html=True)
+    g2.markdown(
+    f'<div class="metric-card">'
+    f'<div class="metric-label">Net Theta (TEX)</div>'
+    f'<div class="metric-value" style="color:{c_tex};">{fmt_val(net_tex_total)}</div>'
+    f'<div class="metric-sub">Decaimiento / Día</div>'
+    f'</div>', 
+    unsafe_allow_html=True
+)
     g2.markdown(f'<div class="metric-card"><div class="metric-label">Net Theta (TEX)</div><div class="metric-value" style="color:{c_tex};">{fmt_val(net_tex_total)}</div><div class="metric-sub">Decaimiento / Día</div></div>', unsafe_allow_html=True)
     g3.markdown(f'<div class="metric-card"><div class="metric-label">Net Vega (VEX)</div><div class="metric-value" style="color:{c_vex};">{fmt_val(net_vex_total)}</div><div class="metric-sub">Por +1% IV</div></div>', unsafe_allow_html=True)
     g4.markdown(f'<div class="metric-card"><div class="metric-label">Net Charm (CHEX)</div><div class="metric-value" style="color:{c_chex};">${net_chex_total:.2f}M</div><div class="metric-sub">Decaimiento Delta / Día</div></div>', unsafe_allow_html=True)
