@@ -1993,7 +1993,7 @@ with tab_gex:
                     barmode='relative',
                     xaxis=dict(title="Strike ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono"), **xaxis_kwargs),
                     yaxis=dict(title="Gamma Exposure ($)", gridcolor="rgba(255,255,255,0.05)", tickfont=dict(family="JetBrains Mono"), range=[y_min_adj, y_max_adj]),
-                    height=560, margin=dict(l=50, r=40, t=50, b=40)
+                    height=710, margin=dict(l=50, r=40, t=50, b=40)
                 )
                 st.plotly_chart(fig2, use_container_width=True)
 
