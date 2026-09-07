@@ -1066,19 +1066,19 @@ if not df_curr.empty and exp_0dte is not None and spot_price > 0:
     atm_iv = float(np.median(valid_ivs)) if len(valid_ivs) > 0 else 0.20
     atm_iv = max(atm_iv, 0.08)
 
-    df_curr = recalculate_gex_for_spot(df_curr, spot_price, T_exp, atm_iv)
+    calls_dominant = df_curr[df_curr['net_gex'] > 0].sort_values('net_gex', ascending=False)
 
     df_curr['call_dex'] = df_curr['delta_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
     df_curr['put_dex'] = df_curr['delta_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
-    df_curr['net_dex'] = df_curr['call_dex'] + df_curr['put_dex']
+    df_curr['net_dex'] = (df_curr['call_dex'] + df_curr['put_dex']).fillna(0.0)
 
     df_curr['call_tex'] = df_curr['theta_c'] * df_curr['openInterest_c'] * 100
     df_curr['put_tex'] = df_curr['theta_p'] * df_curr['openInterest_p'] * 100
-    df_curr['net_tex'] = df_curr['call_tex'] + df_curr['put_tex']
+    df_curr['net_tex'] = (df_curr['call_tex'] + df_curr['put_tex']).fillna(0.0)
 
     df_curr['call_vex'] = df_curr['vega_c'] * df_curr['openInterest_c'] * 100
     df_curr['put_vex'] = df_curr['vega_p'] * df_curr['openInterest_p'] * 100
-    df_curr['net_vex'] = df_curr['call_vex'] + df_curr['put_vex']
+    df_curr['net_vex'] = (df_curr['call_vex'] + df_curr['put_vex']).fillna(0.0)
 
     r_rate = 0.045
     valid_strikes = df_curr['strike'] > 0
@@ -1095,7 +1095,7 @@ if not df_curr.empty and exp_0dte is not None and spot_price > 0:
 
     df_curr['call_chex'] = df_curr['charm_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
     df_curr['put_chex'] = df_curr['charm_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
-    df_curr['net_chex'] = df_curr['call_chex'] - df_curr['put_chex']
+    df_curr['net_chex'] = (df_curr['call_chex'] + df_curr['put_chex']).fillna(0.0)
 
     vanna_val = - norm.pdf(d1_calc) * d2_calc / max(atm_iv, 0.001)
     df_curr.loc[valid_strikes, 'vanna_c'] = vanna_val
@@ -1105,7 +1105,7 @@ if not df_curr.empty and exp_0dte is not None and spot_price > 0:
 
     df_curr['call_vanna'] = df_curr['vanna_c'] * df_curr['openInterest_c'] * 100 * spot_price / 1e6
     df_curr['put_vanna'] = df_curr['vanna_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
-    df_curr['net_vanna'] = df_curr['call_vanna'] + df_curr['put_vanna']
+    df_curr['net_vanna'] = (df_curr['call_vanna'] + df_curr['put_vanna']).fillna(0.0)
 
     calls_dominant = df_curr[df_curr['net_gex'] > 0].sort_values('net_gex', ascending=False)
     top_calls = calls_dominant['strike'].tolist()
