@@ -1098,6 +1098,39 @@ def recalculate_gex_for_spot(df_input, spot_t, T_exp, iv):
     df_out['net_gex'] = df_out['call_gex'] + df_out['put_gex']
     return df_out
 
+def compute_call_put_walls(df_grouped, spot_ref, gap=2.0):
+    """
+    Determina Call Walls y Put Walls por DOMINANCIA DE SIGNO del net_gex:
+    - Un strike es Call Wall SI Y SOLO SI su net_gex es positivo (predominan
+      calls) y es Put Wall si y solo si es negativo (predominan puts). Nunca
+      puede ser ambos a la vez, a diferencia del esquema anterior que
+      rankeaba call_gex y put_gex por separado (eso permitía que un mismo
+      strike apareciera como Call Wall y también como Put Wall).
+    - El ranking dentro de cada lado es por la MAGNITUD del net_gex de ese
+      strike (no por el volumen bruto call_gex/put_gex).
+
+    df_grouped debe venir ya agrupado por 'strike' (una sola fila por strike,
+    sumando todas las expiraciones) y tener las columnas 'strike' y 'net_gex'.
+    Devuelve (cw1, cw2, cw3, pw1, pw2, pw3).
+    """
+    if df_grouped is None or df_grouped.empty or 'net_gex' not in df_grouped.columns:
+        return (spot_ref + gap * 2.5, spot_ref + gap * 5, spot_ref + gap * 7.5,
+                spot_ref - gap * 2.5, spot_ref - gap * 5, spot_ref - gap * 7.5)
+
+    calls_side = df_grouped[df_grouped['net_gex'] > 0].sort_values('net_gex', ascending=False)
+    top_calls = calls_side['strike'].tolist()
+    cw1 = top_calls[0] if len(top_calls) > 0 else spot_ref + gap * 2.5
+    cw2 = top_calls[1] if len(top_calls) > 1 else cw1 + gap
+    cw3 = top_calls[2] if len(top_calls) > 2 else cw2 + gap
+
+    puts_side = df_grouped[df_grouped['net_gex'] < 0].sort_values('net_gex', ascending=True)
+    top_puts = puts_side['strike'].tolist()
+    pw1 = top_puts[0] if len(top_puts) > 0 else spot_ref - gap * 2.5
+    pw2 = top_puts[1] if len(top_puts) > 1 else pw1 - gap
+    pw3 = top_puts[2] if len(top_puts) > 2 else pw2 - gap
+
+    return cw1, cw2, cw3, pw1, pw2, pw3
+
 if not df_curr.empty and spot_price > 0:
     # NOTA: antes esta condicion tambien exigia "exp_0dte is not None", lo que
     # acoplaba el calculo de TODAS las Griegas (DEX/TEX/VEX/CHEX/VANNA) e incluso
@@ -1168,31 +1201,21 @@ if not df_curr.empty and spot_price > 0:
     df_curr['put_vanna'] = df_curr['vanna_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
     df_curr['net_vanna'] = (df_curr['call_vanna'] + df_curr['put_vanna']).fillna(0.0)
 
-    # Call Wall / Put Wall se definen por DOMINANCIA bruta de cada lado
-    # (call_gex / put_gex), no por el net_gex. Un strike con 10M en calls y
-    # 9.9M en puts tiene net_gex chico (+100k) pero sigue siendo un nivel
-    # dominante porque ambos lados tienen mucho volumen; ordenar por net_gex
-    # lo hacía ver "débil" cuando en realidad es de los más fuertes.
+    # Call Wall / Put Wall se definen por DOMINANCIA DE SIGNO del net_gex:
+    # un strike es Call Wall si y solo si su net_gex es positivo, y Put Wall
+    # si y solo si es negativo. Nunca puede ser ambos a la vez, y el ranking
+    # dentro de cada lado es por la magnitud de ese net_gex (ver
+    # compute_call_put_walls arriba).
     #
     # df_curr puede tener varias filas por el mismo strike (una por cada
     # expiración). Si no se agrupa primero, un strike con 2+ expiraciones
     # puede colarse dos veces en el top 3 (ej. cw1 y cw2 con el mismo
     # número), pisando el lugar de otro strike realmente distinto. Se agrupa
-    # por strike sumando call_gex/put_gex de todas las expiraciones antes de
-    # elegir los 3 más dominantes de cada lado.
-    df_gex_by_strike = df_curr.groupby('strike', as_index=False)[['call_gex', 'put_gex']].sum()
+    # por strike sumando call_gex/put_gex/net_gex de todas las expiraciones
+    # antes de elegir los 3 más dominantes de cada lado.
+    df_gex_by_strike = df_curr.groupby('strike', as_index=False)[['call_gex', 'put_gex', 'net_gex']].sum()
 
-    calls_dominant = df_gex_by_strike.sort_values('call_gex', ascending=False)
-    top_calls = calls_dominant['strike'].tolist()
-    cw1 = top_calls[0] if len(top_calls) > 0 else spot_price + 5
-    cw2 = top_calls[1] if len(top_calls) > 1 else cw1 + 2
-    cw3 = top_calls[2] if len(top_calls) > 2 else cw2 + 2
-
-    puts_dominant = df_gex_by_strike.sort_values('put_gex', ascending=True)
-    top_puts = puts_dominant['strike'].tolist()
-    pw1 = top_puts[0] if len(top_puts) > 0 else spot_price - 5
-    pw2 = top_puts[1] if len(top_puts) > 1 else pw1 - 2
-    pw3 = top_puts[2] if len(top_puts) > 2 else pw2 - 2
+    cw1, cw2, cw3, pw1, pw2, pw3 = compute_call_put_walls(df_gex_by_strike, spot_price)
 
     df_curr['cum_gex'] = df_curr['net_gex'].cumsum()
     zero_gamma_idx = (df_curr['cum_gex'].abs()).idxmin() if not df_curr.empty else None
@@ -1813,19 +1836,10 @@ def compute_metrics_for_dte(df_source, exp_keys, spot_ref):
 
     df_agg = df_sel.groupby('strike', as_index=False).agg(agg_map).sort_values('strike').reset_index(drop=True)
 
-    # Igual que en el bloque principal: dominancia bruta por call_gex/put_gex,
-    # no net_gex (ver comentario arriba en el cálculo global de cw1/pw1).
-    calls_dominant = df_agg.sort_values('call_gex', ascending=False) if 'call_gex' in df_agg.columns else pd.DataFrame()
-    top_calls = calls_dominant['strike'].tolist()
-    cw1_v = top_calls[0] if len(top_calls) > 0 else spot_ref + 5
-    cw2_v = top_calls[1] if len(top_calls) > 1 else cw1_v + 2
-    cw3_v = top_calls[2] if len(top_calls) > 2 else cw2_v + 2
-
-    puts_dominant = df_agg.sort_values('put_gex', ascending=True) if 'put_gex' in df_agg.columns else pd.DataFrame()
-    top_puts = puts_dominant['strike'].tolist()
-    pw1_v = top_puts[0] if len(top_puts) > 0 else spot_ref - 5
-    pw2_v = top_puts[1] if len(top_puts) > 1 else pw1_v - 2
-    pw3_v = top_puts[2] if len(top_puts) > 2 else pw2_v - 2
+    # Igual que en el bloque principal: dominancia de SIGNO del net_gex, un
+    # strike solo puede ser Call Wall o Put Wall, nunca ambos (ver
+    # compute_call_put_walls).
+    cw1_v, cw2_v, cw3_v, pw1_v, pw2_v, pw3_v = compute_call_put_walls(df_agg, spot_ref)
 
     zero_gamma_v = spot_ref
     if 'net_gex' in df_agg.columns and not df_agg.empty:
@@ -1986,13 +2000,11 @@ if not df_header_filtered.empty and 'net_gex' in df_header_filtered.columns:
 
     df_hdr_sorted = df_header_filtered.sort_values('strike').reset_index(drop=True)
     # Igual que en el cálculo global: agrupar por strike sumando call_gex/
-    # put_gex de todas las expiraciones antes de rankear, para no subestimar
-    # un strike cuyo volumen está repartido entre varias expiraciones.
-    df_hdr_gex_by_strike = df_hdr_sorted.groupby('strike', as_index=False)[['call_gex', 'put_gex']].sum() if {'call_gex', 'put_gex'}.issubset(df_hdr_sorted.columns) else pd.DataFrame()
-    calls_dom_hdr = df_hdr_gex_by_strike.sort_values('call_gex', ascending=False) if not df_hdr_gex_by_strike.empty else pd.DataFrame()
-    cw1 = float(calls_dom_hdr['strike'].iloc[0]) if not calls_dom_hdr.empty else spot_price + 5
-    puts_dom_hdr = df_hdr_gex_by_strike.sort_values('put_gex', ascending=True) if not df_hdr_gex_by_strike.empty else pd.DataFrame()
-    pw1 = float(puts_dom_hdr['strike'].iloc[0]) if not puts_dom_hdr.empty else spot_price - 5
+    # put_gex/net_gex de todas las expiraciones antes de rankear, para no
+    # subestimar un strike cuyo volumen está repartido entre varias
+    # expiraciones. Dominancia por SIGNO del net_gex (ver compute_call_put_walls).
+    df_hdr_gex_by_strike = df_hdr_sorted.groupby('strike', as_index=False)[['call_gex', 'put_gex', 'net_gex']].sum() if {'call_gex', 'put_gex', 'net_gex'}.issubset(df_hdr_sorted.columns) else pd.DataFrame()
+    cw1, _cw2_hdr, _cw3_hdr, pw1, _pw2_hdr, _pw3_hdr = compute_call_put_walls(df_hdr_gex_by_strike, spot_price)
 
     df_hdr_sorted['cum_gex'] = df_hdr_sorted['net_gex'].cumsum()
     zero_gamma = spot_price
