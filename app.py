@@ -22,14 +22,13 @@ st.set_page_config(page_title="GEX Terminal Pro - Schwab", layout="wide", initia
 # --- MANEJO SEGURO DE SECRETOS ---
 CLIENT_ID = st.secrets.get("CLIENT_ID", "")
 CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "")
-JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "")
-JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "")
-# Bin "en vivo" que lee GexProfileCloud.cs en Quantower (JsonBinId/ApiKey de
-# ese indicador). Se puede sobreescribir en secrets.toml; si no se define,
-# cae por defecto en el mismo bin/API key que ya trae el indicador
-# hardcodeado, para que funcione sin configuración adicional.
-JSONBIN_LIVE_BIN_ID = st.secrets.get("JSONBIN_LIVE_BIN_ID", "6a9b6fb2da38895dfe3ab4fc")
-JSONBIN_LIVE_API_KEY = st.secrets.get("JSONBIN_LIVE_API_KEY", "$2a$10$SJzpaPLR88mtOlFsqg3g5OHxzYrwkkS9QJRYTUIGXnhxyW6bi0nyO")
+# Firebase Realtime Database (reemplaza a JSONBin: sin límite de requests,
+# 1GB gratis). Los "Database secrets" legacy quedaron obsoletos en Firebase,
+# así que en vez de un secreto usamos reglas de la Realtime Database que
+# permiten leer/escribir SOLO en los nodos /live_levels y /history (ver
+# instrucciones de las reglas). FIREBASE_DB_URL es la URL de tu base de
+# datos (Firebase Console > Realtime Database).
+FIREBASE_DB_URL = str(st.secrets.get("FIREBASE_DB_URL", "")).strip().rstrip("/")
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", st.secrets.get("GROQ_KEY", os.environ.get("GROQ_API_KEY", "")))
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 
@@ -545,17 +544,16 @@ def _schwab_call_with_fallback(cache_key, empty_value, fetch_fn):
     return _schwab_last_good.get(cache_key, empty_value)
 
 @st.cache_data(ttl=20)
-def fetch_jsonbin_history(bin_id, api_key):
-    if not bin_id or not api_key:
+def fetch_firebase_history(db_url):
+    if not db_url:
         return {}
     try:
-        url = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
-        headers = {"X-Master-Key": api_key}
-        resp = requests.get(url, headers=headers, timeout=5)
+        url = f"{db_url}/history.json"
+        resp = requests.get(url, timeout=5)
         if resp.status_code == 200:
-            return resp.json().get("record", {})
+            return resp.json() or {}
     except Exception as e:
-        log_to_console("JSONBin Read Error", str(e))
+        log_to_console("Firebase Read Error", str(e))
     return {}
 
 # --- CLIENTES DE IA ---
@@ -871,7 +869,7 @@ if client is not None and isinstance(chain_raw, dict) and len(chain_raw) > 0 and
 # eso lo sigue controlando 'is_online' de arriba.
 schwab_status_online = client is not None and isinstance(chain_raw, dict) and len(chain_raw) > 0
 
-jsonbin_history_data = fetch_jsonbin_history(JSONBIN_BIN_ID, JSONBIN_API_KEY)
+jsonbin_history_data = fetch_firebase_history(FIREBASE_DB_URL)
 
 if not is_online:
     if latest_supabase_snap:
@@ -1334,25 +1332,15 @@ else:
     vix_color = "#EF4444"
 
 # --- PUBLICACIÓN EN VIVO PARA EL INDICADOR DE QUANTOWER (GexProfileCloud.cs) ---
-# El indicador lee, cada 10s, un bin de JSONBin con el esquema:
-#   { qqq_spot, conversion_ratio, cw1..cw3, pw1..pw3, levels: [{strike, net_gex}] }
-# Ese esquema NO es el mismo que usa push_to_jsonbin_bg (historial de
-# Backgamma), así que se maneja acá aparte, con un PUT que REEMPLAZA todo el
-# contenido del bin en cada envío (el indicador solo necesita el último
-# estado, no un historial acumulado).
-def push_live_levels_to_jsonbin_sync(bin_id, api_key, payload):
-    """
-    A diferencia del push del historial, este va SIN thread: el payload es
-    chico, el timeout es corto, y necesitamos el resultado real (status code
-    o excepcion) para poder mostrarlo en la barra lateral. Un thread en
-    background no permite eso de forma confiable (session_state no es
-    seguro de tocar desde otro hilo en Streamlit) y además fallaba en
-    silencio, que es justo el problema que estamos diagnosticando.
-    """
+# El indicador lee, cada 10s, un nodo de Firebase Realtime Database con el
+# esquema: { qqq_spot, conversion_ratio, cw1..cw3, pw1..pw3, levels: [...] }.
+# Va SIN thread (a diferencia del push del historial): el payload es chico,
+# el timeout es corto, y necesitamos el resultado real (status code o
+# excepcion) para poder mostrarlo en la barra lateral.
+def push_live_levels_to_firebase_sync(db_url, payload):
     try:
-        url = f"https://api.jsonbin.io/v3/b/{bin_id}"
-        headers = {"Content-Type": "application/json", "X-Master-Key": api_key}
-        resp = requests.put(url, json=payload, headers=headers, timeout=6)
+        url = f"{db_url}/live_levels.json"
+        resp = requests.put(url, json=payload, headers={"Content-Type": "application/json"}, timeout=6)
         if resp.status_code == 200:
             return {"ok": True, "code": resp.status_code, "detail": "OK"}
         return {"ok": False, "code": resp.status_code, "detail": resp.text[:200]}
@@ -1360,10 +1348,10 @@ def push_live_levels_to_jsonbin_sync(bin_id, api_key, payload):
         return {"ok": False, "code": None, "detail": str(e)[:200]}
 
 def export_live_levels_to_quantower():
-    if not (JSONBIN_LIVE_BIN_ID and JSONBIN_LIVE_API_KEY):
+    if not FIREBASE_DB_URL:
         st.session_state["quantower_push_status"] = {
             "ok": False, "code": None,
-            "detail": "Faltan JSONBIN_LIVE_BIN_ID / JSONBIN_LIVE_API_KEY en secrets.",
+            "detail": "Falta FIREBASE_DB_URL en secrets.",
             "timestamp": datetime.now().strftime("%H:%M:%S")
         }
         return
@@ -1390,7 +1378,7 @@ def export_live_levels_to_quantower():
         "levels": levels_payload
     }
 
-    result = push_live_levels_to_jsonbin_sync(JSONBIN_LIVE_BIN_ID, JSONBIN_LIVE_API_KEY, live_payload)
+    result = push_live_levels_to_firebase_sync(FIREBASE_DB_URL, live_payload)
     result["timestamp"] = datetime.now().strftime("%H:%M:%S")
     st.session_state["quantower_push_status"] = result
     if not result["ok"]:
@@ -2209,30 +2197,31 @@ def push_to_supabase_bg(snapshot_payload):
         except Exception as e:
             log_to_console("Supabase Async Snapshot Error", str(e))
 
-def push_to_jsonbin_bg(bin_id, api_key, date_key, snapshot_entry):
+def push_history_entry_to_firebase(db_url, date_key, snapshot_entry):
     try:
-        url = f"https://api.jsonbin.io/v3/b/{bin_id}"
-        headers = {"Content-Type": "application/json", "X-Master-Key": api_key}
-        resp = requests.get(f"{url}/latest", headers=headers, timeout=3)
-        current_data = {}
-        if resp.status_code == 200:
-            record = resp.json().get("record", {})
-            if isinstance(record, dict):
-                current_data = record
-        
-        if date_key not in current_data or not isinstance(current_data[date_key], list):
-            current_data[date_key] = []
-        
-        existing_times = [s.get("time") for s in current_data[date_key] if isinstance(s, dict)]
-        if snapshot_entry["time"] not in existing_times:
-            current_data[date_key].append(snapshot_entry)
-            if len(current_data) > 15:
-                sorted_dates = sorted(list(current_data.keys()))
-                for old_d in sorted_dates[:-15]:
-                    del current_data[old_d]
-            requests.put(url, json=current_data, headers=headers, timeout=4)
+        day_url = f"{db_url}/history/{date_key}.json"
+        resp = requests.get(day_url, timeout=3)
+        day_list = resp.json() if resp.status_code == 200 else None
+        if not isinstance(day_list, list):
+            day_list = []
+
+        existing_times = [s.get("time") for s in day_list if isinstance(s, dict)]
+        if snapshot_entry["time"] in existing_times:
+            return
+
+        day_list.append(snapshot_entry)
+        requests.put(day_url, json=day_list, headers={"Content-Type": "application/json"}, timeout=4)
+
+        # Poda: deja como maximo los ultimos 15 dias. shallow=true trae solo
+        # las claves de fecha (sin todo el contenido de cada dia).
+        shallow_resp = requests.get(f"{db_url}/history.json?shallow=true", timeout=3)
+        if shallow_resp.status_code == 200:
+            all_dates = shallow_resp.json() or {}
+            if isinstance(all_dates, dict) and len(all_dates) > 15:
+                for old_d in sorted(all_dates.keys())[:-15]:
+                    requests.delete(f"{db_url}/history/{old_d}.json", timeout=3)
     except Exception as e:
-        log_to_console("JSONBin Async Background Push", str(e))
+        log_to_console("Firebase Async Background Push", str(e))
 
 def export_snapshot_throttled():
     if not is_online:
@@ -2265,10 +2254,10 @@ def export_snapshot_throttled():
         
         threading.Thread(target=push_to_supabase_bg, args=(snapshot_entry,), daemon=True).start()
 
-        if JSONBIN_BIN_ID and JSONBIN_API_KEY:
+        if FIREBASE_DB_URL:
             threading.Thread(
-                target=push_to_jsonbin_bg,
-                args=(JSONBIN_BIN_ID, JSONBIN_API_KEY, date_str, snapshot_entry),
+                target=push_history_entry_to_firebase,
+                args=(FIREBASE_DB_URL, date_str, snapshot_entry),
                 daemon=True
             ).start()
 
