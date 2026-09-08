@@ -1500,15 +1500,20 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
 """
 
 def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
-                  metrics_override=None, dte_context_label=None):
+                  metrics_override=None, dte_context_label=None, spot_override=None):
     """
     metrics_override: dict opcional (salida de compute_metrics_for_dte) para que
     el analisis use los niveles/griegas de un DTE especifico en vez de los
     globales (todas las expiraciones combinadas).
     dte_context_label: texto opcional que se le indica a la IA para dejar claro
     con que expiracion(es) se genero el analisis.
+    spot_override: precio manual opcional (ej. cuando el precio automatico esta
+    desactualizado por un feriado bursatil) que reemplaza a spot_price para
+    todo el analisis, incluyendo el texto que ve la IA.
     """
     m = metrics_override or {}
+    spot_ia = float(spot_override) if spot_override and spot_override > 0 else spot_price
+    conversion_ratio_ia = (nq_price / spot_ia) if nq_price > 0 and spot_ia > 0 else conversion_ratio
 
     net_dex_val = m.get("net_dex_val", float(df_curr['net_dex'].sum()) if not df_curr.empty and 'net_dex' in df_curr.columns else 0.0)
     net_tex_val = m.get("net_tex_val", float(df_curr['net_tex'].sum()) if not df_curr.empty and 'net_tex' in df_curr.columns else 0.0)
@@ -1536,9 +1541,19 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
         if dte_context_label else ""
     )
 
+    manual_price_note = (
+        f"\n    NOTA: El precio de {ticker_symbol} fue ingresado manualmente por el usuario (${spot_ia:.2f}) "
+        f"porque el precio automatico estaba desactualizado (ej. feriado bursatil, divergencia ETH/RTH). "
+        f"Usa este precio como el spot real vigente para todo el analisis.\n"
+        if spot_override and spot_override > 0 else ""
+    )
+
     system_prompt = f"""
     Eres un analista cuantitativo institucional experto en opciones y estratega de mercado en el GEX Quant Terminal.
-    Tu objetivo es entregar un análisis técnico, estructurado y profundo para {ticker_symbol}. {dte_note}
+    Tu objetivo es entregar un análisis técnico, estructurado y profundo para {ticker_symbol}. {dte_note}{manual_price_note}
+
+    DATOS DEL MERCADO EN TIEMPO REAL ({ticker_symbol}):
+    - Ticker: {ticker_symbol} | Spot Price: {spot_ia:.2f} USD | Ratio NQ: {conversion_ratio_ia:.4f}
 
     DATOS DEL MERCADO EN TIEMPO REAL ({ticker_symbol}):
     - Ticker: {ticker_symbol} | Spot Price: {spot_price:.2f} USD | Ratio NQ: {conversion_ratio:.4f}
@@ -1593,7 +1608,7 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
             log_to_console("Gemini AI Engine", str(e_gemini))
 
     return generar_analisis_local(
-        ticker_symbol, spot_price, net_gex_total_ia, regime_str_ia, condition_str_ia,
+        ticker_symbol, spot_ia, net_gex_total_ia, regime_str_ia, condition_str_ia,
         call_gex_sum_ia, put_gex_sum_ia, total_gex,
         cw1_ia, cw2_ia, cw3_ia, pw1_ia, pw2_ia, pw3_ia, zero_gamma_ia,
         iv_str_ia, iv_rank_str_ia, net_dex_val, net_tex_val, net_vex_val,
@@ -1908,17 +1923,33 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
 
     with col_btn1:
         if st.button("📊 Pre-Market", key="btn_ai_premarket", use_container_width=True):
+            spot_manual_str_pm = st.session_state.get("precio_manual_premarket", "")
+            try:
+                spot_manual_pm = float(spot_manual_str_pm) if spot_manual_str_pm.strip() else 0.0
+            except ValueError:
+                spot_manual_pm = 0.0
+            spot_pm = spot_manual_pm if spot_manual_pm > 0 else spot_price
+
             premarket_keys = find_exp_keys_by_date(df_curr, session_info["premarket_date_str"])
-            metrics_pm = compute_metrics_for_dte(df_curr, premarket_keys, spot_price)
+            metrics_pm = compute_metrics_for_dte(df_curr, premarket_keys, spot_pm)
             with st.spinner("Analizando pre-market..."):
                 res = consultar_ia(
                     tipo_analisis="Pre-Market",
                     mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando VIX, régimen de Gamma, niveles clave, Griegas y Escenarios A, B y C.",
                     metrics_override=metrics_pm,
-                    dte_context_label=f"sesión próxima del {session_info['premarket_date_str']}"
+                    dte_context_label=f"sesión próxima del {session_info['premarket_date_str']}" + (
+                        f" (precio manual ${spot_pm:.2f})" if spot_manual_pm > 0 else ""
+                    ),
+                    spot_override=spot_pm
                 )
                 save_chat_message("assistant", res)
         st.caption("🕒 Sesión próxima")
+        st.text_input(
+            "💲 Precio manual (opcional)",
+            value="", placeholder="Ej: 721.40",
+            key="precio_manual_premarket",
+            help="Si el precio automático está desactualizado (feriados, baja liquidez, divergencia ETH/RTH), escribe aquí el precio real de QQQ para que el análisis Pre-Market lo use. Déjalo vacío para usar el precio automático."
+        )
 
     with col_btn2:
         if st.button("📈 Intradía", key="btn_ai_intraday", use_container_width=True):
