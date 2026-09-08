@@ -1340,23 +1340,36 @@ else:
 # Backgamma), así que se maneja acá aparte, con un PUT que REEMPLAZA todo el
 # contenido del bin en cada envío (el indicador solo necesita el último
 # estado, no un historial acumulado).
-def push_live_levels_to_jsonbin_bg(bin_id, api_key, payload):
+def push_live_levels_to_jsonbin_sync(bin_id, api_key, payload):
+    """
+    A diferencia del push del historial, este va SIN thread: el payload es
+    chico, el timeout es corto, y necesitamos el resultado real (status code
+    o excepcion) para poder mostrarlo en la barra lateral. Un thread en
+    background no permite eso de forma confiable (session_state no es
+    seguro de tocar desde otro hilo en Streamlit) y además fallaba en
+    silencio, que es justo el problema que estamos diagnosticando.
+    """
     try:
         url = f"https://api.jsonbin.io/v3/b/{bin_id}"
         headers = {"Content-Type": "application/json", "X-Master-Key": api_key}
-        requests.put(url, json=payload, headers=headers, timeout=4)
+        resp = requests.put(url, json=payload, headers=headers, timeout=6)
+        if resp.status_code == 200:
+            return {"ok": True, "code": resp.status_code, "detail": "OK"}
+        return {"ok": False, "code": resp.status_code, "detail": resp.text[:200]}
     except Exception as e:
-        log_to_console("JSONBin Live Levels Push Error", str(e))
+        return {"ok": False, "code": None, "detail": str(e)[:200]}
 
 def export_live_levels_to_quantower():
     if not (JSONBIN_LIVE_BIN_ID and JSONBIN_LIVE_API_KEY):
+        st.session_state["quantower_push_status"] = {
+            "ok": False, "code": None,
+            "detail": "Faltan JSONBIN_LIVE_BIN_ID / JSONBIN_LIVE_API_KEY en secrets.",
+            "timestamp": datetime.now().strftime("%H:%M:%S")
+        }
         return
     if spot_price <= 0 or df_curr is None or df_curr.empty or 'net_gex' not in df_curr.columns:
         return
 
-    # Throttle a ~8s: el indicador solo lee cada 10s, no tiene sentido
-    # publicar más seguido que eso (y evita gastar de más la cuota gratis
-    # de JSONBin si el auto-refresco de la app está en 1-5s).
     last_push = st.session_state.get("last_live_levels_push", 0.0)
     now_ts = time.time()
     if now_ts - last_push < 8:
@@ -1377,13 +1390,20 @@ def export_live_levels_to_quantower():
         "levels": levels_payload
     }
 
-    threading.Thread(
-        target=push_live_levels_to_jsonbin_bg,
-        args=(JSONBIN_LIVE_BIN_ID, JSONBIN_LIVE_API_KEY, live_payload),
-        daemon=True
-    ).start()
+    result = push_live_levels_to_jsonbin_sync(JSONBIN_LIVE_BIN_ID, JSONBIN_LIVE_API_KEY, live_payload)
+    result["timestamp"] = datetime.now().strftime("%H:%M:%S")
+    st.session_state["quantower_push_status"] = result
+    if not result["ok"]:
+        log_to_console("Quantower Live Levels Push", f"{result['code']} - {result['detail']}")
 
 export_live_levels_to_quantower()
+
+_qs = st.session_state.get("quantower_push_status")
+if _qs:
+    if _qs["ok"]:
+        st.sidebar.caption(f"🟢 Feed Quantower OK · {_qs['timestamp']}")
+    else:
+        st.sidebar.caption(f"🔴 Feed Quantower FALLÓ ({_qs['code'] or 'sin conexión'}) · {_qs['timestamp']} · {_qs['detail']}")
 
 @st.cache_data(ttl=30)
 def compute_z_matrix_cached(fine_strikes_arr, full_spots_arr, df_records, min_stk, max_stk, iv_val, t_exp_val):
