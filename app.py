@@ -1368,22 +1368,17 @@ def export_live_levels_to_quantower():
     live_cw1, live_cw2, live_cw3 = cw1, cw2, cw3
     live_pw1, live_pw2, live_pw3 = pw1, pw2, pw3
 
-    # Usamos EXACTAMENTE las mismas expiraciones que el usuario tiene
-    # seleccionadas en el selector de DTE de "GEX INFO" (state_key
-    # "selected_dte_keys"), para que las barras y los walls que le llegan
-    # al indicador de Quantower coincidan 1:1 con lo que se ve en el
-    # gráfico "Strike Profile (Net Gamma Exposure)" de la web. Antes esto
-    # sumaba SIEMPRE todas las expiraciones combinadas (sin filtrar por
-    # DTE), lo que podía hacer que un strike distinto al que domina en el
-    # gráfico apareciera como el nivel más ancho/sobresaliente en el
-    # indicador (ej. combinando expiraciones, otro strike terminaba con
-    # mayor magnitud de net_gex que el que realmente domina en la vista
-    # filtrada).
-    if 'exp_key' in df_curr.columns:
-        selected_keys = st.session_state.get("selected_dte_keys", [])
-        if not selected_keys and 'dte' in df_curr.columns and not df_curr.empty:
-            selected_keys = [df_curr.sort_values('dte')['exp_key'].iloc[0]]
-        df_sel = df_curr[df_curr['exp_key'].isin(selected_keys)]
+    # El feed de Quantower NO debe depender de lo que cualquier usuario tenga
+    # seleccionado en su navegador: st.session_state es POR SESIÓN, así que
+    # con varias personas viendo la web a la vez (cada una con su propio DTE
+    # elegido), depender de esa selección haría que el feed compartido de
+    # Firebase parpadeara entre la selección de quien hizo el último push.
+    # En vez de eso, el feed siempre usa una regla fija y determinística:
+    # la expiración más cercana (0DTE), igual sin importar cuántas sesiones
+    # haya abiertas ni qué esté mirando cada quien en pantalla.
+    if 'exp_key' in df_curr.columns and 'dte' in df_curr.columns and not df_curr.empty:
+        nearest_dte_keys = [df_curr.sort_values('dte')['exp_key'].iloc[0]]
+        df_sel = df_curr[df_curr['exp_key'].isin(nearest_dte_keys)]
         if not df_sel.empty:
             df_levels_source = df_sel
             df_walls_live = df_sel.groupby('strike', as_index=False)['net_gex'].sum()
