@@ -496,6 +496,54 @@ def get_schwab_client():
 
 client = get_schwab_client()
 
+# --- ACCESO SEGURO AL CLIENTE SCHWAB COMPARTIDO (FIX BUG MULTIUSUARIO) ---
+# 'client' es UN SOLO objeto (st.cache_resource) reutilizado por las 3
+# sesiones de usuario en paralelo. schwab-py envuelve una requests.Session +
+# manejo de refresh de OAuth token, que no está garantizado thread-safe: si
+# dos sesiones llaman client.get_option_chain()/get_price_history()/get_quote()
+# casi al mismo tiempo (p. ej. porque cambiar el DTE dispara un rerun extra
+# de una de las sesiones justo cuando el TTL del cache ya expiró), puede
+# haber una condición de carrera que hace fallar una de las dos llamadas.
+#
+# El problema NO era solo esa excepción puntual: como fetch_option_chain_schwab
+# (y las demás fetch_* de Schwab) están cacheadas con st.cache_data usando
+# solo (symbol, strikes) como clave -es decir, UNA sola entrada de caché
+# compartida por TODOS los usuarios del mismo ticker-, un resultado vacío
+# causado por esa excepción quedaba GUARDADO en esa única entrada compartida
+# y se servía a las otras 2 sesiones durante el TTL, aunque ellas no hubieran
+# tocado nada. Eso es lo que se veía como "otro usuario pierde su vista al
+# cambiar el DTE".
+#
+# Solución: (1) un Lock que serializa todas las llamadas de red al cliente
+# compartido, para eliminar la condición de carrera de raíz; (2) un cache de
+# "último dato bueno" en memoria de proceso (separado del st.cache_data de
+# Streamlit) para que, si una llamada falla igual, se sirva el último dato
+# válido conocido en vez de un resultado vacío -y así un fallo transitorio en
+# una sesión nunca "vacía" el gráfico de las otras-.
+_schwab_client_lock = threading.Lock()
+_schwab_last_good = {}
+
+def _schwab_call_with_fallback(cache_key, empty_value, fetch_fn):
+    """Ejecuta fetch_fn() serializado por _schwab_client_lock. Si devuelve un
+    resultado no vacío, lo guarda como 'último bueno' para cache_key y lo
+    retorna. Si falla o devuelve vacío, retorna el último bueno conocido (si
+    existe) en vez de propagar el vacío al caché compartido de Streamlit."""
+    try:
+        with _schwab_client_lock:
+            result = fetch_fn()
+        is_empty = (
+            result is None
+            or (isinstance(result, (dict, list)) and len(result) == 0)
+            or (isinstance(result, pd.DataFrame) and result.empty)
+            or (isinstance(result, (int, float)) and result == empty_value)
+        )
+        if not is_empty:
+            _schwab_last_good[cache_key] = result
+            return result
+    except Exception as e:
+        log_to_console(f"Schwab call error ({cache_key})", str(e))
+    return _schwab_last_good.get(cache_key, empty_value)
+
 @st.cache_data(ttl=20)
 def fetch_jsonbin_history(bin_id, api_key):
     if not bin_id or not api_key:
@@ -610,7 +658,8 @@ if st.sidebar.button("🔄 ACTUALIZAR DATOS AHORA", use_container_width=True):
 def fetch_history_schwab(symbol):
     if not client:
         return pd.DataFrame()
-    try:
+
+    def _do_fetch():
         today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         freq_type = getattr(client.PriceHistory.FrequencyType, 'MINUTE', 'minute') if hasattr(client, 'PriceHistory') else 'minute'
         freq = getattr(client.PriceHistory.Frequency, 'EVERY_MINUTE', 'every_minute') if hasattr(client, 'PriceHistory') else 'every_minute'
@@ -634,15 +683,16 @@ def fetch_history_schwab(symbol):
                     'low': 'Low', 'close': 'Close', 'volume': 'Volume'
                 }, inplace=True)
                 return df
-    except Exception as e:
-        log_to_console("fetch_history_schwab", str(e))
-    return pd.DataFrame()
+        return pd.DataFrame()
+
+    return _schwab_call_with_fallback(f"history:{symbol}", pd.DataFrame(), _do_fetch)
 
 @st.cache_data(ttl=5)
 def fetch_option_chain_schwab(symbol, strikes_count):
     if not client:
         return {}
-    try:
+
+    def _do_fetch():
         today = datetime.now()
         contract_type = getattr(client.Options.ContractType, 'ALL', 'ALL') if hasattr(client, 'Options') else 'ALL'
         resp = client.get_option_chain(
@@ -654,15 +704,16 @@ def fetch_option_chain_schwab(symbol, strikes_count):
         )
         if resp.status_code == 200:
             return resp.json()
-    except Exception as e:
-        log_to_console("fetch_option_chain_schwab", str(e))
-    return {}
+        return {}
+
+    return _schwab_call_with_fallback(f"chain:{symbol}:{strikes_count}", {}, _do_fetch)
 
 @st.cache_data(ttl=5)
 def fetch_nq_price_schwab():
     if not client:
         return 0.0
-    try:
+
+    def _do_fetch():
         resp = client.get_quote("/NQ")
         if resp.status_code == 200:
             data = resp.json()
@@ -671,15 +722,16 @@ def fetch_nq_price_schwab():
             price = float(quote_data.get("lastPrice", quote_data.get("closePrice", 0.0)))
             if price > 0:
                 return price
-    except Exception as e:
-        log_to_console("fetch_nq_price_schwab", str(e))
-    return 0.0
+        return 0.0
+
+    return _schwab_call_with_fallback("nq_price", 0.0, _do_fetch)
 
 @st.cache_data(ttl=15)
 def fetch_vix_schwab():
     if not client:
         return 0.0
-    try:
+
+    def _do_fetch():
         for sym in ["$VIX", "VIX", "$VIX.X"]:
             resp = client.get_quote(sym)
             if resp.status_code == 200:
@@ -689,9 +741,9 @@ def fetch_vix_schwab():
                 price = float(quote_data.get("lastPrice", quote_data.get("closePrice", 0.0)))
                 if price > 0:
                     return price
-    except Exception as e:
-        log_to_console("fetch_vix_schwab", str(e))
-    return 0.0
+        return 0.0
+
+    return _schwab_call_with_fallback("vix_price", 0.0, _do_fetch)
 
 now_tz = pd.Timestamp.now(tz=tz_target)
 ref_today = now_tz.floor('D').tz_localize(None)
@@ -1624,6 +1676,12 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
 def render_dte_selector(df_source, location_key, state_key="selected_dte_keys",
                          use_popover=False, popover_label="📂 DTE"):
     """
+    AUDITADO (bug multiusuario "cambiar DTE expulsa a otro usuario"): esta
+    funcion usa exclusivamente st.session_state, que en Streamlit esta
+    aislado por sesion de navegador -no es la causa del bug-. La causa real
+    era el cache compartido de las funciones fetch_*_schwab (ver comentario
+    junto a _schwab_call_with_fallback, arriba en el archivo).
+
     Renderiza el selector de DTE (boton "DTE" + botones rapidos + multiselect).
 
     - state_key controla en que variable de session_state se guarda la seleccion.
