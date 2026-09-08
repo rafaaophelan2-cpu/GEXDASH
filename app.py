@@ -1260,10 +1260,14 @@ def compute_z_matrix_cached(fine_strikes_arr, full_spots_arr, df_records, min_st
             Z_mat[:, t_idx] += gauss_weight * net_gex_t[k_idx]
 
     if Z_mat.size > 0 and Z_mat.shape[1] > 1:
-        # sigma[0] (eje de strikes) se sube de 0.0 a 1.3 para que los niveles
-        # se vean como un resplandor difuminado en vez de una franja con
-        # bordes duros; sigma[1] (eje de tiempo) se mantiene igual.
-        Z_mat = gaussian_filter(Z_mat, sigma=(1.3, 0.6))
+        # sigma[0] (eje de strikes, en unidades de índice de fine_strikes que
+        # están espaciados cada $0.5) se sube apenas de 0.0 a 0.45 (~$0.22 de
+        # difuminado real). Es lo justo para que el borde del nivel se vea
+        # suave/iluminado en vez de un bloque con bordes duros, sin que el
+        # resplandor de un strike entero se mezcle con el del strike de al
+        # lado (que está a $1, o sea 2 pasos de índice de distancia).
+        # sigma[1] (eje de tiempo) se mantiene igual.
+        Z_mat = gaussian_filter(Z_mat, sigma=(0.45, 0.6))
     return Z_mat
 
 if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
