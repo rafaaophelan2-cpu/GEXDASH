@@ -1364,7 +1364,32 @@ def export_live_levels_to_quantower():
         return
     st.session_state["last_live_levels_push"] = now_ts
 
-    df_levels = df_curr.groupby('strike', as_index=False)['net_gex'].sum().sort_values('strike')
+    df_levels_source = df_curr
+    live_cw1, live_cw2, live_cw3 = cw1, cw2, cw3
+    live_pw1, live_pw2, live_pw3 = pw1, pw2, pw3
+
+    # Usamos EXACTAMENTE las mismas expiraciones que el usuario tiene
+    # seleccionadas en el selector de DTE de "GEX INFO" (state_key
+    # "selected_dte_keys"), para que las barras y los walls que le llegan
+    # al indicador de Quantower coincidan 1:1 con lo que se ve en el
+    # gráfico "Strike Profile (Net Gamma Exposure)" de la web. Antes esto
+    # sumaba SIEMPRE todas las expiraciones combinadas (sin filtrar por
+    # DTE), lo que podía hacer que un strike distinto al que domina en el
+    # gráfico apareciera como el nivel más ancho/sobresaliente en el
+    # indicador (ej. combinando expiraciones, otro strike terminaba con
+    # mayor magnitud de net_gex que el que realmente domina en la vista
+    # filtrada).
+    if 'exp_key' in df_curr.columns:
+        selected_keys = st.session_state.get("selected_dte_keys", [])
+        if not selected_keys and 'dte' in df_curr.columns and not df_curr.empty:
+            selected_keys = [df_curr.sort_values('dte')['exp_key'].iloc[0]]
+        df_sel = df_curr[df_curr['exp_key'].isin(selected_keys)]
+        if not df_sel.empty:
+            df_levels_source = df_sel
+            df_walls_live = df_sel.groupby('strike', as_index=False)['net_gex'].sum()
+            live_cw1, live_cw2, live_cw3, live_pw1, live_pw2, live_pw3 = compute_call_put_walls(df_walls_live, spot_price)
+
+    df_levels = df_levels_source.groupby('strike', as_index=False)['net_gex'].sum().sort_values('strike')
     levels_payload = [
         {"strike": float(r['strike']), "net_gex": float(r['net_gex'])}
         for _, r in df_levels.iterrows()
@@ -1373,8 +1398,8 @@ def export_live_levels_to_quantower():
     live_payload = {
         "qqq_spot": float(spot_price),
         "conversion_ratio": float(conversion_ratio) if 'conversion_ratio' in dir() and conversion_ratio else 41.125,
-        "cw1": float(cw1), "cw2": float(cw2), "cw3": float(cw3),
-        "pw1": float(pw1), "pw2": float(pw2), "pw3": float(pw3),
+        "cw1": float(live_cw1), "cw2": float(live_cw2), "cw3": float(live_cw3),
+        "pw1": float(live_pw1), "pw2": float(live_pw2), "pw3": float(live_pw3),
         "levels": levels_payload
     }
 
