@@ -296,6 +296,23 @@ st.markdown("""
         gap: 6px;
     }
 
+    /* Alinea verticalmente el badge ONLINE/OFFLINE con el botón DTE de la
+       misma fila, y lo acerca al borde del botón (con un pequeño espacio,
+       sin tocarlo) para que al abrir el popover de DTE no quede tapando
+       ni sobreponiéndose al badge. */
+    [data-testid="stHorizontalBlock"]:has(.badge-online),
+    [data-testid="stHorizontalBlock"]:has(.badge-offline),
+    [data-testid="stHorizontalBlock"]:has(.badge-warning) {
+        align-items: center !important;
+    }
+    [data-testid="stHorizontalBlock"]:has(.badge-online) > div:has(.badge-online),
+    [data-testid="stHorizontalBlock"]:has(.badge-offline) > div:has(.badge-offline),
+    [data-testid="stHorizontalBlock"]:has(.badge-warning) > div:has(.badge-warning) {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-end !important;
+    }
+
     .badge-warning {
         background: rgba(245, 158, 11, 0.12);
         border: 1px solid rgba(245, 158, 11, 0.4);
@@ -1243,7 +1260,10 @@ def compute_z_matrix_cached(fine_strikes_arr, full_spots_arr, df_records, min_st
             Z_mat[:, t_idx] += gauss_weight * net_gex_t[k_idx]
 
     if Z_mat.size > 0 and Z_mat.shape[1] > 1:
-        Z_mat = gaussian_filter(Z_mat, sigma=(0.0, 0.6))
+        # sigma[0] (eje de strikes) se sube de 0.0 a 1.3 para que los niveles
+        # se vean como un resplandor difuminado en vez de una franja con
+        # bordes duros; sigma[1] (eje de tiempo) se mantiene igual.
+        Z_mat = gaussian_filter(Z_mat, sigma=(1.3, 0.6))
     return Z_mat
 
 if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
@@ -1863,7 +1883,6 @@ col_metrics_title, col_metrics_badge, col_metrics_dte = st.columns([7.2, 1.3, 1.
 with col_metrics_title:
     st.markdown("<p style='margin:0 0 4px 0; font-family:\"JetBrains Mono\"; font-size:0.72rem; color:#6E7681; letter-spacing:0.5px;'>📊 PANEL DE MÉTRICAS (filtrable por DTE — compartido con GEX INFO y GREEKS)</p>", unsafe_allow_html=True)
 with col_metrics_badge:
-    st.markdown("<div style='height:2px;'></div>", unsafe_allow_html=True)
     if schwab_status_online:
         st.markdown('<div class="badge-online">🟢 ONLINE</div>', unsafe_allow_html=True)
     else:
@@ -2131,14 +2150,25 @@ with tab_live:
         fig_live.add_trace(go.Heatmap(
             x=full_timestamps, y=fine_strikes, z=Z_matrix_scaled, customdata=custom_hover_matrix,
             hovertemplate="<b>Hora:</b> %{x}<br><b>Strike:</b> $%{y:.2f}<br><b>Net Gamma Real:</b> %{customdata}<extra></extra>",
-            zsmooth=False, zmin=-1.0, zmax=1.0, zmid=0,
+            # zsmooth='best' interpola entre celdas (en vez de pintar
+            # rectángulos planos con bordes duros), dando el efecto de
+            # iluminación/resplandor difuminado que se pidió.
+            zsmooth='best', zmin=-1.0, zmax=1.0, zmid=0,
+            # La opacidad máxima baja de 0.95 a 0.55 para que los niveles más
+            # fuertes se sigan viendo claramente por encima del resto, pero
+            # sin saturar el color al punto de tapar las velas. Se agregan
+            # paradas intermedias para que el degradado hacia el centro
+            # transparente sea más gradual (efecto "glow") en vez de un
+            # salto abrupto.
             colorscale=[
-                [0.0, 'rgba(239, 68, 68, 0.95)'],
-                [0.2, 'rgba(239, 68, 68, 0.2)'],
-                [0.45, 'rgba(6, 8, 13, 0.0)'],
-                [0.55, 'rgba(6, 8, 13, 0.0)'],
-                [0.8, 'rgba(16, 185, 129, 0.2)'],
-                [1.0, 'rgba(16, 185, 129, 0.95)']
+                [0.0, 'rgba(239, 68, 68, 0.55)'],
+                [0.12, 'rgba(239, 68, 68, 0.32)'],
+                [0.30, 'rgba(239, 68, 68, 0.10)'],
+                [0.47, 'rgba(6, 8, 13, 0.0)'],
+                [0.53, 'rgba(6, 8, 13, 0.0)'],
+                [0.70, 'rgba(16, 185, 129, 0.10)'],
+                [0.88, 'rgba(16, 185, 129, 0.32)'],
+                [1.0, 'rgba(16, 185, 129, 0.55)']
             ],
             colorbar=dict(title=dict(text="Net GEX ($)", side="top"), x=-0.05)
         ))
