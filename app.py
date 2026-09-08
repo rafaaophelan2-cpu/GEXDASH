@@ -596,7 +596,13 @@ if auto_refresh:
 
 st.sidebar.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 if st.sidebar.button("🔄 ACTUALIZAR DATOS AHORA", use_container_width=True):
-    st.cache_data.clear()
+    # IMPORTANTE: st.cache_data.clear() borra el caché de TODA la app para
+    # TODOS los usuarios conectados (no solo el de esta sesión). Por eso,
+    # cuando alguien pulsaba este botón, a cualquier otra persona viendo la
+    # web en simultáneo se le vaciaban de golpe todos los datos/barras hasta
+    # el siguiente fetch. En vez de borrar el caché global, forzamos un
+    # rerun: como los caches ya tienen TTLs cortos (5-30s), los datos se
+    # refrescan solos sin afectar a otras sesiones activas.
     st.rerun()
 
 # --- FUNCIONES DE MERCADO SCHWAB ---
@@ -1446,68 +1452,36 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
     else:
         drift_bias = "neutral / equilibrado entre flujos de compra y venta"
 
-    # --- CALIBRACIÓN PARA DAY TRADING (horizonte 30-60 minutos) ---
-    # En vez de usar distancias fijas en dólares (que no significan lo mismo
-    # en un ticker de $50 que en uno de $700), todo se calcula en % del spot
-    # y se etiqueta según si es realista alcanzarlo/revertirlo dentro de una
-    # operación de 30-60 minutos, o si es un nivel estructural (más de swing).
-    DAYTRADE_HORIZON_TXT = "30-60 minutos"
-    ALCANCE_INTRADIA_PCT = 0.45   # % del spot: umbral de lo "alcanzable" en 30-60 min
-    MICRO_BARRIDO_PCT = 0.15      # % del spot: tamaño de una mecha/stop-hunt realista
-
-    micro_barrido = max(round(spot * (MICRO_BARRIDO_PCT / 100.0), 2), 0.10)
-
-    def _tag_alcance(dist_pct_abs):
-        if dist_pct_abs <= ALCANCE_INTRADIA_PCT:
-            return "✅ Alcanzable dentro de 30-60 min"
-        return "⚠️ Nivel estructural (fuera del horizonte de 30-60 min; usar solo como referencia, no como objetivo de entrada)"
-
-    dist_cw1_abs = abs(dist_cw1)
-    dist_pw1_abs = abs(dist_pw1)
-    dist_zg_abs = abs(dist_zg)
-
-    cw1_tag = _tag_alcance(dist_cw1_abs)
-    pw1_tag = _tag_alcance(dist_pw1_abs)
-    zg_tag = _tag_alcance(dist_zg_abs)
-
-    # Objetivo "de sesión" para A/B: si el nivel estructural (CW2/PW2/ZeroGamma)
-    # queda fuera de rango intradía, se usa un objetivo más cercano y realista
-    # (a medio camino entre el nivel operativo y el spot) en vez de proyectar
-    # todo el recorrido hasta el nivel lejano en 30-60 minutos.
-    target_a_call = cw2_v if abs(((cw2_v - spot) / spot) * 100) <= ALCANCE_INTRADIA_PCT else round((cw1_v + spot) / 2, 2)
-    target_a_put = pw2_v if abs(((spot - pw2_v) / spot) * 100) <= ALCANCE_INTRADIA_PCT else round((pw1_v + spot) / 2, 2)
-    target_b_short = zg_v if dist_zg_abs <= ALCANCE_INTRADIA_PCT else round((cw1_v + spot) / 2, 2)
-    target_b_long = zg_v if dist_zg_abs <= ALCANCE_INTRADIA_PCT else round((pw1_v + spot) / 2, 2)
-
     entry_a_call = cw1_v + 0.50
+    target_a_call = cw2_v
     entry_a_put = pw1_v - 0.50
-    entry_b_short = cw1_v - 0.25
-    entry_b_long = pw1_v + 0.25
+    target_a_put = pw2_v
 
-    # Escenario C: el barrido es SIEMPRE una mecha corta (micro_barrido) más
-    # allá del nivel, nunca un tramo largo de varios puntos — y la reversión
-    # se espera en minutos (dentro de la propia operación de day trading).
-    sweep_high = cw1_v + micro_barrido
+    entry_b_short = cw1_v - 0.25
+    target_b_short = zg_v
+    entry_b_long = pw1_v + 0.25
+    target_b_long = zg_v
+
+    sweep_high = cw1_v + 1.50
     rev_target_high = spot
-    sweep_low = pw1_v - micro_barrido
+    sweep_low = pw1_v - 1.50
     rev_target_low = spot
 
     return f"""### 📌 DIAGNÓSTICO ESTRATÉGICO Y ESCENARIOS DE MERCADO ({ticker})
-**Horizonte Operativo: Day Trading ({DAYTRADE_HORIZON_TXT} por operación)**
 
 #### 1. Estado Actual y Régimen del Mercado
-* **Precio Spot Actual**: ${spot:.2f} USD | **Zero Gamma Level (Flip)**: ${zg_v:.2f} USD ({dist_zg:+.2f}% de distancia) — {zg_tag}.
+* **Precio Spot Actual**: ${spot:.2f} USD | **Zero Gamma Level (Flip)**: ${zg_v:.2f} USD ({dist_zg:+.2f}% de distancia).
 * **Régimen Dominante**: {regime_tipo}.
 * **Índice VIX**: {vix_guidance}
 * **Dinámica de Volatilidad**: IV ATM en {iv_txt} (Percentil: {iv_rank}). {behavior}
 
 #### 2. Puntos Clave de Inflexión y Niveles Operativos
 * **Resistencias Principales (Call Walls)**:
-  - **CW1 (Techo Principal)**: ${cw1_v:.0f} USD ({dist_cw1:+.2f}%) — {cw1_tag}
-  - **CW2 / CW3 (Resistencias de Extensión)**: ${cw2_v:.0f} USD / ${cw3_v:.0f} USD *(niveles estructurales de referencia, no objetivos de day trading)*
+  - **CW1 (Techo Principal)**: ${cw1_v:.0f} USD ({dist_cw1:+.2f}%)
+  - **CW2 / CW3 (Resistencias de Extensión)**: ${cw2_v:.0f} USD / ${cw3_v:.0f} USD
 * **Soportes Principales (Put Walls)**:
-  - **PW1 (Suelo Principal)**: ${pw1_v:.0f} USD (-{dist_pw1:.2f}%) — {pw1_tag}
-  - **PW2 / PW3 (Soportes de Extensión)**: ${pw2_v:.0f} USD / ${pw3_v:.0f} USD *(niveles estructurales de referencia, no objetivos de day trading)*
+  - **PW1 (Suelo Principal)**: ${pw1_v:.0f} USD (-{dist_pw1:.2f}%)
+  - **PW2 / PW3 (Soportes de Extensión)**: ${pw2_v:.0f} USD / ${pw3_v:.0f} USD
 * **Flip Level / Pivote Técnico**: **${zg_v:.2f} USD**. Mantenerse por encima sostiene el control alcista en rango; perforar a la baja liberará volatilidad a favor de los vendedores.
 
 #### 3. Análisis de Flujo y Griegas
@@ -1516,20 +1490,19 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
 * **Vanna Exposure (VANNA)**: {vanna_v:.2f}M USD. Mide el impacto en deltas si la IV comprime o se expande en la sesión.
 * **Net Premium Drift**: {fmt_val(drift_v).replace('$', '')} USD. El flujo acumulado muestra un sesgo {drift_bias}.
 
-#### 4. Escenarios Operativos Cuantitativos (A, B y C) — calibrados a {DAYTRADE_HORIZON_TXT}
+#### 4. Escenarios Operativos Cuantitativos (A, B y C)
 
 * **Escenario A (Continuación / Retesteo Aceptado)**:
-  - **Caso Alcista**: Ruptura sostenida y consolidación por encima de Call Wall 1 (${cw1_v:.0f} USD). **Precio de Entrada de Confirmación**: ${entry_a_call:.2f} USD | **Precio Objetivo (30-60 min)**: ${target_a_call:.2f} USD. {cw1_tag}
-  - **Caso Bajista**: Perforación y aceptación por debajo de Put Wall 1 (${pw1_v:.0f} USD). **Precio de Entrada de Confirmación**: ${entry_a_put:.2f} USD | **Precio Objetivo (30-60 min)**: ${target_a_put:.2f} USD. {pw1_tag}
+  - **Caso Alcista**: Ruptura sostenida y consolidación por encima de Call Wall 1 (${cw1_v:.0f} USD). **Precio de Entrada de Confirmación**: ${entry_a_call:.2f} USD | **Precio Objetivo**: ${target_a_call:.0f} USD (CW2).
+  - **Caso Bajista**: Perforación y aceptación por debajo de Put Wall 1 (${pw1_v:.0f} USD). **Precio de Entrada de Confirmación**: ${entry_a_put:.2f} USD | **Precio Objetivo**: ${target_a_put:.0f} USD (PW2).
 
 * **Escenario B (Rechazo en Nivel Clave)**:
-  - **Rechazo en Resistencia**: Ataque a CW1 (${cw1_v:.0f} USD) con absorción de oferta y rechazo en velas de 5-15 min. **Entrada en Venta**: ${entry_b_short:.2f} USD | **Precio Objetivo (30-60 min)**: ${target_b_short:.2f} USD.
-  - **Rebote en Soporte**: Testeo de PW1 (${pw1_v:.0f} USD) con fuerte defensa de primas y rebote inmediato en velas de 5-15 min. **Entrada en Compra**: ${entry_b_long:.2f} USD | **Precio Objetivo (30-60 min)**: ${target_b_long:.2f} USD.
+  - **Rechazo en Resistencia**: Ataque a CW1 (${cw1_v:.0f} USD) con absorción de oferta y reitero de rechazo en velas intradía. **Entrada en Venta**: ${entry_b_short:.2f} USD | **Precio Objetivo**: ${target_b_short:.2f} USD (Zero Gamma Level).
+  - **Rebote en Soporte**: Testeo de PW1 (${pw1_v:.0f} USD) con fuerte defensa de primas y rebote inmediato. **Entrada en Compra**: ${entry_b_long:.2f} USD | **Precio Objetivo**: ${target_b_long:.2f} USD (Zero Gamma Level).
 
-* **Escenario C (Trampa / Falsa Ruptura - Liquidity Sweep, mecha corta)**:
-  - **Barrido Superior**: Mecha rápida sobre CW1 hasta **${sweep_high:.2f} USD** (barrido de ~{MICRO_BARRIDO_PCT:.2f}% sobre el nivel, no un tramo de varios puntos) para barrer liquidez de compra (stop loss) y reingresar bajo ${cw1_v:.0f} USD **en cuestión de minutos (1-3 velas de 5 min)**. **Precio Numérico de Reversión Esperado**: ${rev_target_high:.2f} USD.
-  - **Barrido Inferior**: Mecha rápida bajo PW1 hasta **${sweep_low:.2f} USD** (barrido de ~{MICRO_BARRIDO_PCT:.2f}% bajo el nivel) para activar stops de compradores y revertir por encima de ${pw1_v:.0f} USD **en cuestión de minutos (1-3 velas de 5 min)**. **Precio Numérico de Reversión Esperado**: ${rev_target_low:.2f} USD.
-  - *Nota: si PW1/CW1 están marcados como "nivel estructural" arriba, este barrido es un escenario de vigilancia, no una entrada activa para la próxima hora — ese recorrido de por sí ya excede el horizonte de day trading.*
+* **Escenario C (Trampa / Falsa Ruptura - Liquidity Sweep)**:
+  - **Barrido Superior**: Dilatación de alta volatilidad sobre CW1 alcanzando **${sweep_high:.2f} USD** para barrer liquidez de compra (stop loss) y reingresar rápidamente bajo ${cw1_v:.0f} USD. **Precio Numérico de Reversión Esperado**: ${rev_target_high:.2f} USD / ${zg_v:.2f} USD.
+  - **Barrido Inferior**: Falsa ruptura de PW1 cayendo hasta **${sweep_low:.2f} USD** para activar stops de compradores y revertir velozmente por encima de ${pw1_v:.0f} USD. **Precio Numérico de Reversión Esperado**: ${rev_target_low:.2f} USD.
 """
 
 def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
@@ -1585,14 +1558,6 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
     Eres un analista cuantitativo institucional experto en opciones y estratega de mercado en el GEX Quant Terminal.
     Tu objetivo es entregar un análisis técnico, estructurado y profundo para {ticker_symbol}. {dte_note}{manual_price_note}
 
-    PERFIL DEL USUARIO Y HORIZONTE OPERATIVO (OBLIGATORIO, aplica a TODO el informe):
-    - El usuario hace DAY TRADING, no swing trading. Sus operaciones duran entre 30 y 60 minutos, casi nunca más.
-    - Todo precio de entrada, objetivo o reversión que propongas debe ser algo que pueda ocurrir y completarse dentro de ese horizonte de 30-60 minutos, NO en horas o días.
-    - Regla de distancia: si un nivel (CW1, CW2, CW3, PW1, PW2, PW3 o Zero Gamma) está a más de ~0.4%-0.5% del precio spot actual, NO lo presentes como un objetivo alcanzable "ahora"; acláralo explícitamente como "nivel estructural / de referencia, fuera del rango de 30-60 minutos" y, si corresponde, ofrece en su lugar un objetivo más cercano (por ejemplo el punto medio entre el spot y ese nivel, o el Zero Gamma si está más cerca).
-    - Regla para el Escenario C (Trampa / Falsa Ruptura - Liquidity Sweep): el "barrido" o mecha debe ser SIEMPRE pequeño, del orden de 0.10%-0.20% del precio spot más allá del nivel roto — nunca un tramo de varios puntos o de más del 0.5-1% del spot. Si para llegar al nivel (CW1/PW1) el precio ya necesita un recorrido grande (más del umbral de 0.4-0.5% mencionado arriba), dilo explícitamente: ese barrido no es una jugada de day trading para la próxima hora, es un escenario de vigilancia de sesión.
-    - Sé explícito con los tiempos: usa frases como "en los próximos 30-60 minutos", "en 1-3 velas de 5 minutos", "reversión esperada en minutos", en vez de dar la sensación de que el movimiento puede tomarse su tiempo (horas o días).
-    - Prioriza precisión y cercanía al precio actual sobre completitud: es preferible un escenario más corto y realista para la próxima hora que uno "completo" pero que en la práctica es una jugada de swing.
-
     DATOS DEL MERCADO EN TIEMPO REAL ({ticker_symbol}):
     - Ticker: {ticker_symbol} | Spot Price: {spot_ia:.2f} USD | Ratio NQ: {conversion_ratio_ia:.4f}
 
@@ -1620,15 +1585,14 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
        **1. Estado Actual y Régimen del Mercado** (incluyendo el diagnóstico explícito del VIX)
        **2. Puntos Clave de Inflexión y Niveles Operativos**
        **3. Análisis de Flujo y Griegas (DEX, VEX, CHEX, VANNA, Net Drift)**
-       **4. Escenarios Operativos Cuantitativos (DETALLAR DE MANERA OBLIGATORIA CON PRECIOS EXACTOS, CALIBRADOS A 30-60 MINUTOS DE DAY TRADING):**
-          * **Escenario A (Continuación / Retesteo Aceptado)**: Detalla el comportamiento si el precio rompe y sostiene un nivel clave (CW1={cw1_ia:.0f} o PW1={pw1_ia:.0f}), especificando los precios exactos de entrada y un objetivo que sea realista de alcanzar en 30-60 minutos (si CW2/PW2 quedan fuera de ese rango, dilo y usa un objetivo intermedio más cercano).
-          * **Escenario B (Rechazo en Nivel Clave)**: Detalla qué ocurre al rebotar o ser rechazado en la resistencia/soporte principal (CW1 o PW1), con sus precios reales de entrada y un objetivo hacia Zero Gamma ({zero_gamma_ia:.2f}) SOLO si ese nivel está a una distancia alcanzable en 30-60 minutos; si no, indícalo y da un objetivo más cercano.
-          * **Escenario C (Trampa / Falsa Ruptura)**: Detalla la maniobra de barrido de liquidez (falsa ruptura por encima de CW1 o debajo de PW1) como una MECHA CORTA (0.10%-0.20% del spot más allá del nivel, nunca varios puntos), con reversión esperada en minutos, y el precio numérico de reversión esperado.
+       **4. Escenarios Operativos Cuantitativos (DETALLAR DE MANERA OBLIGATORIA CON PRECIOS EXACTOS):**
+          * **Escenario A (Continuación / Retesteo Aceptado)**: Detalla el comportamiento si el precio rompe y sostiene un nivel clave (CW1={cw1_ia:.0f} o PW1={pw1_ia:.0f}), especificando los precios exactos de entrada y objetivo.
+          * **Escenario B (Rechazo en Nivel Clave)**: Detalla qué ocurre al rebotar o ser rechazado en la resistencia/soporte principal (CW1 o PW1), con sus precios reales de entrada y objetivos hacia Zero Gamma ({zero_gamma_ia:.2f}).
+          * **Escenario C (Trampa / Falsa Ruptura)**: Detalla la maniobra de barrido de liquidez (falsa ruptura por encima de CW1 o debajo de PW1) y el precio numérico de reversión esperado.
     3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$). Usa fuentes y letras normales en USD.
-    4. Recuerda en todo momento que el usuario opera en marcos de 30-60 minutos (day trading): evita cualquier escenario, objetivo o lenguaje que implique un desarrollo de varias horas o días (eso es swing trading y NO es lo que pidió el usuario).
     """
 
-    prompt_final = mensaje_usuario or f"Entrega un informe cuantitativo completo de opciones para {tipo_analisis} con los datos del mercado actual, para operaciones de DAY TRADING de 30-60 minutos, incluyendo el diagnóstico del VIX y explícitamente los Escenarios A, B y C con precios numéricos exactos y realistas para ese horizonte."
+    prompt_final = mensaje_usuario or f"Entrega un informe cuantitativo completo de opciones para {tipo_analisis} con los datos del mercado actual, incluyendo el diagnóstico del VIX y explícitamente los Escenarios A, B y C con precios numéricos exactos."
 
     if GROQ_API_KEY:
         try:
@@ -1977,7 +1941,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
             with st.spinner("Analizando pre-market..."):
                 res = consultar_ia(
                     tipo_analisis="Pre-Market",
-                    mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando VIX, régimen de Gamma, niveles clave, Griegas y Escenarios A, B y C, calibrados para operaciones de day trading de 30-60 minutos (no swing trading).",
+                    mensaje_usuario="Genera el análisis estratégico Pre-Market evaluando VIX, régimen de Gamma, niveles clave, Griegas y Escenarios A, B y C.",
                     metrics_override=metrics_pm,
                     dte_context_label=f"sesión próxima del {session_info['premarket_date_str']}" + (
                         f" (precio manual ${spot_pm:.2f})" if spot_manual_pm > 0 else ""
@@ -2000,7 +1964,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
             with st.spinner("Analizando intradía..."):
                 res = consultar_ia(
                     tipo_analisis="Mercado Intradía",
-                    mensaje_usuario="Genera el informe intradía evaluando lectura de VIX, flujo de Gamma, decaimiento por Charm/Vanna, Net Drift y Escenarios A, B y C, calibrados para operaciones de day trading de 30-60 minutos (no swing trading).",
+                    mensaje_usuario="Genera el informe intradía evaluando lectura de VIX, flujo de Gamma, decaimiento por Charm/Vanna, Net Drift y Escenarios A, B y C.",
                     metrics_override=metrics_id,
                     dte_context_label=f"sesión actual del {today_date_str}"
                 )
@@ -2014,7 +1978,7 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
             with st.spinner("Procesando análisis completo..."):
                 res = consultar_ia(
                     tipo_analisis="Análisis Estratégico",
-                    mensaje_usuario="Proporciona el Diagnóstico Estratégico completo con niveles exactos, VIX y Escenarios A, B y C de trading, calibrados para operaciones de day trading de 30-60 minutos (no swing trading).",
+                    mensaje_usuario="Proporciona el Diagnóstico Estratégico completo con niveles exactos, VIX y Escenarios A, B y C de trading.",
                     metrics_override=metrics_an,
                     dte_context_label=", ".join(analisis_keys) if analisis_keys else None
                 )
@@ -2679,8 +2643,7 @@ with tab_data:
                     f"con base en el resumen de datos actual. Incluye un análisis exhaustivo del impacto del VIX en {vix_val:.2f}, "
                     f"el comportamiento esperado según el régimen de Gamma, el desglose de Griegas (DEX, TEX, VEX, CHEX, VANNA) "
                     f"y OBLIGATORIAMENTE los Escenarios A (Continuación / Retesteo Aceptado), B (Rechazo en Nivel Clave) y "
-                    f"C (Trampa / Falsa Ruptura - Liquidity Sweep) especificando los precios numéricos exactos de entrada y objetivo, "
-                    f"calibrados para operaciones de day trading de 30-60 minutos (no swing trading)."
+                    f"C (Trampa / Falsa Ruptura - Liquidity Sweep) especificando los precios numéricos exactos de entrada y objetivo."
                 )
                 diag_output = consultar_ia(
                     tipo_analisis="Diagnóstico Data Summary",
