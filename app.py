@@ -1173,13 +1173,22 @@ if not df_curr.empty and spot_price > 0:
     # 9.9M en puts tiene net_gex chico (+100k) pero sigue siendo un nivel
     # dominante porque ambos lados tienen mucho volumen; ordenar por net_gex
     # lo hacía ver "débil" cuando en realidad es de los más fuertes.
-    calls_dominant = df_curr.sort_values('call_gex', ascending=False)
+    #
+    # df_curr puede tener varias filas por el mismo strike (una por cada
+    # expiración). Si no se agrupa primero, un strike con 2+ expiraciones
+    # puede colarse dos veces en el top 3 (ej. cw1 y cw2 con el mismo
+    # número), pisando el lugar de otro strike realmente distinto. Se agrupa
+    # por strike sumando call_gex/put_gex de todas las expiraciones antes de
+    # elegir los 3 más dominantes de cada lado.
+    df_gex_by_strike = df_curr.groupby('strike', as_index=False)[['call_gex', 'put_gex']].sum()
+
+    calls_dominant = df_gex_by_strike.sort_values('call_gex', ascending=False)
     top_calls = calls_dominant['strike'].tolist()
     cw1 = top_calls[0] if len(top_calls) > 0 else spot_price + 5
     cw2 = top_calls[1] if len(top_calls) > 1 else cw1 + 2
     cw3 = top_calls[2] if len(top_calls) > 2 else cw2 + 2
 
-    puts_dominant = df_curr.sort_values('put_gex', ascending=True)
+    puts_dominant = df_gex_by_strike.sort_values('put_gex', ascending=True)
     top_puts = puts_dominant['strike'].tolist()
     pw1 = top_puts[0] if len(top_puts) > 0 else spot_price - 5
     pw2 = top_puts[1] if len(top_puts) > 1 else pw1 - 2
@@ -1976,11 +1985,13 @@ if not df_header_filtered.empty and 'net_gex' in df_header_filtered.columns:
     total_oi_sum = call_oi_sum + put_oi_sum
 
     df_hdr_sorted = df_header_filtered.sort_values('strike').reset_index(drop=True)
-    # Dominancia bruta por call_gex/put_gex (ver comentario en el cálculo
-    # global de cw1/pw1) en vez de net_gex.
-    calls_dom_hdr = df_hdr_sorted.sort_values('call_gex', ascending=False) if 'call_gex' in df_hdr_sorted.columns else pd.DataFrame()
+    # Igual que en el cálculo global: agrupar por strike sumando call_gex/
+    # put_gex de todas las expiraciones antes de rankear, para no subestimar
+    # un strike cuyo volumen está repartido entre varias expiraciones.
+    df_hdr_gex_by_strike = df_hdr_sorted.groupby('strike', as_index=False)[['call_gex', 'put_gex']].sum() if {'call_gex', 'put_gex'}.issubset(df_hdr_sorted.columns) else pd.DataFrame()
+    calls_dom_hdr = df_hdr_gex_by_strike.sort_values('call_gex', ascending=False) if not df_hdr_gex_by_strike.empty else pd.DataFrame()
     cw1 = float(calls_dom_hdr['strike'].iloc[0]) if not calls_dom_hdr.empty else spot_price + 5
-    puts_dom_hdr = df_hdr_sorted.sort_values('put_gex', ascending=True) if 'put_gex' in df_hdr_sorted.columns else pd.DataFrame()
+    puts_dom_hdr = df_hdr_gex_by_strike.sort_values('put_gex', ascending=True) if not df_hdr_gex_by_strike.empty else pd.DataFrame()
     pw1 = float(puts_dom_hdr['strike'].iloc[0]) if not puts_dom_hdr.empty else spot_price - 5
 
     df_hdr_sorted['cum_gex'] = df_hdr_sorted['net_gex'].cumsum()
