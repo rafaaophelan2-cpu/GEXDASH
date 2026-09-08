@@ -24,6 +24,12 @@ CLIENT_ID = st.secrets.get("CLIENT_ID", "")
 CLIENT_SECRET = st.secrets.get("CLIENT_SECRET", "")
 JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "")
 JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "")
+# Bin "en vivo" que lee GexProfileCloud.cs en Quantower (JsonBinId/ApiKey de
+# ese indicador). Se puede sobreescribir en secrets.toml; si no se define,
+# cae por defecto en el mismo bin/API key que ya trae el indicador
+# hardcodeado, para que funcione sin configuración adicional.
+JSONBIN_LIVE_BIN_ID = st.secrets.get("JSONBIN_LIVE_BIN_ID", "6a9b6fb2da38895dfe3ab4fc")
+JSONBIN_LIVE_API_KEY = st.secrets.get("JSONBIN_LIVE_API_KEY", "$2a$10$SJzpaPLR88mtOlFsqg3g5OHxzYrwkkS9QJRYTUIGXnhxyW6bi0nyO")
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", st.secrets.get("GROQ_KEY", os.environ.get("GROQ_API_KEY", "")))
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 
@@ -1162,13 +1168,18 @@ if not df_curr.empty and spot_price > 0:
     df_curr['put_vanna'] = df_curr['vanna_p'] * df_curr['openInterest_p'] * 100 * spot_price / 1e6
     df_curr['net_vanna'] = (df_curr['call_vanna'] + df_curr['put_vanna']).fillna(0.0)
 
-    calls_dominant = df_curr[df_curr['net_gex'] > 0].sort_values('net_gex', ascending=False)
+    # Call Wall / Put Wall se definen por DOMINANCIA bruta de cada lado
+    # (call_gex / put_gex), no por el net_gex. Un strike con 10M en calls y
+    # 9.9M en puts tiene net_gex chico (+100k) pero sigue siendo un nivel
+    # dominante porque ambos lados tienen mucho volumen; ordenar por net_gex
+    # lo hacía ver "débil" cuando en realidad es de los más fuertes.
+    calls_dominant = df_curr.sort_values('call_gex', ascending=False)
     top_calls = calls_dominant['strike'].tolist()
     cw1 = top_calls[0] if len(top_calls) > 0 else spot_price + 5
     cw2 = top_calls[1] if len(top_calls) > 1 else cw1 + 2
     cw3 = top_calls[2] if len(top_calls) > 2 else cw2 + 2
 
-    puts_dominant = df_curr[df_curr['net_gex'] < 0].sort_values('net_gex', ascending=True)
+    puts_dominant = df_curr.sort_values('put_gex', ascending=True)
     top_puts = puts_dominant['strike'].tolist()
     pw1 = top_puts[0] if len(top_puts) > 0 else spot_price - 5
     pw2 = top_puts[1] if len(top_puts) > 1 else pw1 - 2
@@ -1231,6 +1242,58 @@ else:
     vix_status = "Muy Alta Volatilidad"
     vix_desc = "Miedo grande / Movimientos muy expansivos"
     vix_color = "#EF4444"
+
+# --- PUBLICACIÓN EN VIVO PARA EL INDICADOR DE QUANTOWER (GexProfileCloud.cs) ---
+# El indicador lee, cada 10s, un bin de JSONBin con el esquema:
+#   { qqq_spot, conversion_ratio, cw1..cw3, pw1..pw3, levels: [{strike, net_gex}] }
+# Ese esquema NO es el mismo que usa push_to_jsonbin_bg (historial de
+# Backgamma), así que se maneja acá aparte, con un PUT que REEMPLAZA todo el
+# contenido del bin en cada envío (el indicador solo necesita el último
+# estado, no un historial acumulado).
+def push_live_levels_to_jsonbin_bg(bin_id, api_key, payload):
+    try:
+        url = f"https://api.jsonbin.io/v3/b/{bin_id}"
+        headers = {"Content-Type": "application/json", "X-Master-Key": api_key}
+        requests.put(url, json=payload, headers=headers, timeout=4)
+    except Exception as e:
+        log_to_console("JSONBin Live Levels Push Error", str(e))
+
+def export_live_levels_to_quantower():
+    if not (JSONBIN_LIVE_BIN_ID and JSONBIN_LIVE_API_KEY):
+        return
+    if spot_price <= 0 or df_curr is None or df_curr.empty or 'net_gex' not in df_curr.columns:
+        return
+
+    # Throttle a ~8s: el indicador solo lee cada 10s, no tiene sentido
+    # publicar más seguido que eso (y evita gastar de más la cuota gratis
+    # de JSONBin si el auto-refresco de la app está en 1-5s).
+    last_push = st.session_state.get("last_live_levels_push", 0.0)
+    now_ts = time.time()
+    if now_ts - last_push < 8:
+        return
+    st.session_state["last_live_levels_push"] = now_ts
+
+    df_levels = df_curr.groupby('strike', as_index=False)['net_gex'].sum().sort_values('strike')
+    levels_payload = [
+        {"strike": float(r['strike']), "net_gex": float(r['net_gex'])}
+        for _, r in df_levels.iterrows()
+    ]
+
+    live_payload = {
+        "qqq_spot": float(spot_price),
+        "conversion_ratio": float(conversion_ratio) if 'conversion_ratio' in dir() and conversion_ratio else 41.125,
+        "cw1": float(cw1), "cw2": float(cw2), "cw3": float(cw3),
+        "pw1": float(pw1), "pw2": float(pw2), "pw3": float(pw3),
+        "levels": levels_payload
+    }
+
+    threading.Thread(
+        target=push_live_levels_to_jsonbin_bg,
+        args=(JSONBIN_LIVE_BIN_ID, JSONBIN_LIVE_API_KEY, live_payload),
+        daemon=True
+    ).start()
+
+export_live_levels_to_quantower()
 
 @st.cache_data(ttl=30)
 def compute_z_matrix_cached(fine_strikes_arr, full_spots_arr, df_records, min_stk, max_stk, iv_val, t_exp_val):
@@ -1741,13 +1804,15 @@ def compute_metrics_for_dte(df_source, exp_keys, spot_ref):
 
     df_agg = df_sel.groupby('strike', as_index=False).agg(agg_map).sort_values('strike').reset_index(drop=True)
 
-    calls_dominant = df_agg[df_agg['net_gex'] > 0].sort_values('net_gex', ascending=False) if 'net_gex' in df_agg.columns else pd.DataFrame()
+    # Igual que en el bloque principal: dominancia bruta por call_gex/put_gex,
+    # no net_gex (ver comentario arriba en el cálculo global de cw1/pw1).
+    calls_dominant = df_agg.sort_values('call_gex', ascending=False) if 'call_gex' in df_agg.columns else pd.DataFrame()
     top_calls = calls_dominant['strike'].tolist()
     cw1_v = top_calls[0] if len(top_calls) > 0 else spot_ref + 5
     cw2_v = top_calls[1] if len(top_calls) > 1 else cw1_v + 2
     cw3_v = top_calls[2] if len(top_calls) > 2 else cw2_v + 2
 
-    puts_dominant = df_agg[df_agg['net_gex'] < 0].sort_values('net_gex', ascending=True) if 'net_gex' in df_agg.columns else pd.DataFrame()
+    puts_dominant = df_agg.sort_values('put_gex', ascending=True) if 'put_gex' in df_agg.columns else pd.DataFrame()
     top_puts = puts_dominant['strike'].tolist()
     pw1_v = top_puts[0] if len(top_puts) > 0 else spot_ref - 5
     pw2_v = top_puts[1] if len(top_puts) > 1 else pw1_v - 2
@@ -1911,9 +1976,11 @@ if not df_header_filtered.empty and 'net_gex' in df_header_filtered.columns:
     total_oi_sum = call_oi_sum + put_oi_sum
 
     df_hdr_sorted = df_header_filtered.sort_values('strike').reset_index(drop=True)
-    calls_dom_hdr = df_hdr_sorted[df_hdr_sorted['net_gex'] > 0].sort_values('net_gex', ascending=False)
+    # Dominancia bruta por call_gex/put_gex (ver comentario en el cálculo
+    # global de cw1/pw1) en vez de net_gex.
+    calls_dom_hdr = df_hdr_sorted.sort_values('call_gex', ascending=False) if 'call_gex' in df_hdr_sorted.columns else pd.DataFrame()
     cw1 = float(calls_dom_hdr['strike'].iloc[0]) if not calls_dom_hdr.empty else spot_price + 5
-    puts_dom_hdr = df_hdr_sorted[df_hdr_sorted['net_gex'] < 0].sort_values('net_gex', ascending=True)
+    puts_dom_hdr = df_hdr_sorted.sort_values('put_gex', ascending=True) if 'put_gex' in df_hdr_sorted.columns else pd.DataFrame()
     pw1 = float(puts_dom_hdr['strike'].iloc[0]) if not puts_dom_hdr.empty else spot_price - 5
 
     df_hdr_sorted['cum_gex'] = df_hdr_sorted['net_gex'].cumsum()
