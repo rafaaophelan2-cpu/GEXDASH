@@ -1427,18 +1427,71 @@ if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
     records_dict = df_curr[['strike', 'openInterest_c', 'openInterest_p']].to_dict('records') if not df_curr.empty else []
     Z_matrix_real = compute_z_matrix_cached(fine_strikes, np.array(full_spots), records_dict, min_strike, max_strike, atm_iv, T_exp)
 
+# --- Net Drift: histórico REAL de Call/Put GEX (no un proxy de precio) ---
+# Antes esto se inventaba a partir del movimiento del precio y el volumen
+# (price_changes_drift * vols_drift), lo cual sesgaba a Calls a solo crecer
+# en subidas y a Puts a solo crecer casi siempre, sin importar la cantidad
+# real de contratos/gamma de cada lado. El resultado: las dos líneas SIEMPRE
+# divergían en direcciones opuestas en vez de entrelazarse.
+#
+# En vez de eso, reconstruimos la serie real del día a partir de los
+# snapshots que la app ya guarda cada ~60s (export_snapshot_throttled),
+# que incluyen call_gex/put_gex reales por strike. Sumando esos valores por
+# timestamp obtenemos cómo evolucionó el GEX real de calls y de puts a lo
+# largo del día: sube y baja de forma independiente según cambian OI/gamma/
+# spot, exactamente lo que se busca (cuanto más negativo el lado put, más
+# debe "bajar" esa línea, y viceversa para calls).
+today_key_drift = now_tz.strftime('%Y-%m-%d')
+today_snaps_for_drift = []
+if jsonbin_history_data and today_key_drift in jsonbin_history_data:
+    today_snaps_for_drift = jsonbin_history_data.get(today_key_drift, [])
+elif is_cloud_backup and latest_supabase_snap:
+    today_snaps_for_drift = fetch_supabase_gex_history(ticker_symbol, limit=390)
+
+call_gex_by_time, put_gex_by_time, net_gex_by_time = {}, {}, {}
+for _snap in today_snaps_for_drift:
+    _t_key = _snap.get("time")
+    if not _t_key:
+        continue
+    _strikes_list = _snap.get("strikes", [])
+    if _strikes_list:
+        _c_sum = sum(float(_s.get("call_gex", 0.0)) for _s in _strikes_list)
+        _p_sum = sum(float(_s.get("put_gex", 0.0)) for _s in _strikes_list)
+    else:
+        _c_sum, _p_sum = 0.0, 0.0
+    call_gex_by_time[_t_key] = _c_sum
+    put_gex_by_time[_t_key] = _p_sum
+    net_gex_by_time[_t_key] = float(_snap.get("net_gex", _c_sum + _p_sum))
+
+has_real_drift_data = len(call_gex_by_time) >= 2
+
 closes_drift = np.array(full_spots)
 vols_drift = h_1m_reindexed['Volume'].fillna(1000).values if not h_1m_reindexed.empty else np.full(len(full_timestamps), 1000)
 
-if len(closes_drift) > 1:
-    price_changes_drift = np.diff(closes_drift, prepend=closes_drift[0])
-    call_drift_raw = np.cumsum(np.where(price_changes_drift >= 0, price_changes_drift * vols_drift * 0.12, price_changes_drift * vols_drift * 0.08))
-    put_drift_raw = np.cumsum(np.where(price_changes_drift < 0, -price_changes_drift * vols_drift * 0.18, price_changes_drift * vols_drift * 0.05))
-    net_drift_raw = call_drift_raw - put_drift_raw
+if has_real_drift_data:
+    call_drift_raw = np.zeros(len(full_timestamps))
+    put_drift_raw = np.zeros(len(full_timestamps))
+    net_drift_raw = np.zeros(len(full_timestamps))
+    _last_c, _last_p, _last_n = 0.0, 0.0, 0.0
+    for _i, _t in enumerate(full_timestamps):
+        if _t in call_gex_by_time:
+            _last_c, _last_p, _last_n = call_gex_by_time[_t], put_gex_by_time[_t], net_gex_by_time[_t]
+        call_drift_raw[_i] = _last_c
+        put_drift_raw[_i] = _last_p
+        net_drift_raw[_i] = _last_n
     last_call_drift, last_put_drift, last_net_drift = float(call_drift_raw[-1]), float(put_drift_raw[-1]), float(net_drift_raw[-1])
 else:
-    call_drift_raw, put_drift_raw, net_drift_raw = np.zeros(len(full_timestamps)), np.zeros(len(full_timestamps)), np.zeros(len(full_timestamps))
-    last_call_drift, last_put_drift, last_net_drift = 0.0, 0.0, 0.0
+    # Fallback: aún no hay suficiente histórico real guardado hoy (ej. app
+    # recién abierta). Se usa el proxy anterior solo como relleno temporal.
+    if len(closes_drift) > 1:
+        price_changes_drift = np.diff(closes_drift, prepend=closes_drift[0])
+        call_drift_raw = np.cumsum(np.where(price_changes_drift >= 0, price_changes_drift * vols_drift * 0.12, price_changes_drift * vols_drift * 0.08))
+        put_drift_raw = np.cumsum(np.where(price_changes_drift < 0, -price_changes_drift * vols_drift * 0.18, price_changes_drift * vols_drift * 0.05))
+        net_drift_raw = call_drift_raw - put_drift_raw
+        last_call_drift, last_put_drift, last_net_drift = float(call_drift_raw[-1]), float(put_drift_raw[-1]), float(net_drift_raw[-1])
+    else:
+        call_drift_raw, put_drift_raw, net_drift_raw = np.zeros(len(full_timestamps)), np.zeros(len(full_timestamps)), np.zeros(len(full_timestamps))
+        last_call_drift, last_put_drift, last_net_drift = 0.0, 0.0, 0.0
 
 if not jsonbin_history_data and not latest_supabase_snap:
     mock_date = now_tz.strftime('%Y-%m-%d')
