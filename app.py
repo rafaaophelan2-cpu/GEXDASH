@@ -619,6 +619,18 @@ tz_choice = st.sidebar.selectbox("TIMEZONE", ["UTC-5 (Lima)", "UTC-4 (New York)"
 tz_target = "America/Lima" if "UTC-5" in tz_choice else "America/New_York"
 now_tz = pd.Timestamp.now(tz=tz_target)
 
+# --- Zona horaria FIJA para guardado de snapshots (Firebase/Supabase) ---
+# tz_target/now_tz de arriba son SOLO para lo que cada usuario ve en pantalla
+# (selector por sesión). Si 3 personas usan la web con selecciones distintas
+# (Lima vs NY), guardar snapshots con la hora de "now_tz" hacía que el mismo
+# instante real quedara etiquetado con horas distintas según quién lo guardó
+# (desfase de 1h), rompiendo el chequeo anti-duplicados de Firebase y
+# desalineando NET DRIFT/BACKGAMMA al leer datos guardados por otra sesión.
+# Ahora TODO lo que se guarda (time/date de snapshots) usa siempre NY,
+# sin importar qué tenga elegido cada usuario en su sidebar.
+STORAGE_TZ = "America/New_York"
+now_tz_store = pd.Timestamp.now(tz=STORAGE_TZ)
+
 st.sidebar.markdown("<hr style='border-color:rgba(255,255,255,0.06);'>", unsafe_allow_html=True)
 
 auto_refresh = st.sidebar.toggle("AUTO-REFRESCO EN VIVO", value=True)
@@ -930,6 +942,12 @@ end_time = pd.Timestamp(end_str).tz_localize(tz_target)
 
 full_time_grid = pd.date_range(start_time, end_time, freq="1min")
 full_timestamps = full_time_grid.strftime('%H:%M').tolist()
+# Mismo instante real, etiquetado en NY fija (STORAGE_TZ) — se usa solo para
+# cruzar contra snapshots guardados en Firebase/Supabase (que desde el fix
+# de zona horaria siempre guardan su "time" en NY), sin importar qué tenga
+# elegido el usuario en su sidebar. El eje X del gráfico sigue usando
+# full_timestamps (hora de visualización de cada sesión).
+full_timestamps_ny = full_time_grid.tz_convert(STORAGE_TZ).strftime('%H:%M').tolist()
 
 min_strike = int(np.floor(spot_price - strike_range)) if spot_price > 0 else 0
 max_strike = int(np.ceil(spot_price + strike_range)) if spot_price > 0 else 100
@@ -954,6 +972,7 @@ elif is_cloud_backup and latest_supabase_snap:
     supabase_history = fetch_supabase_gex_history(ticker_symbol, limit=390)
     if supabase_history:
         full_timestamps = [pd.to_datetime(s.get("time", s.get("created_at", datetime.now()))).strftime('%H:%M') for s in supabase_history]
+        full_timestamps_ny = full_timestamps  # ya vienen guardados en NY fija
         full_spots = [s.get("spot", spot_price) for s in supabase_history]
         if full_spots and full_spots[-1] > 0:
             spot_price = float(full_spots[-1])
@@ -973,6 +992,7 @@ elif is_cloud_backup and jsonbin_history_data:
     
     if latest_day_snaps:
         full_timestamps = [s.get("time") for s in latest_day_snaps]
+        full_timestamps_ny = full_timestamps  # ya vienen guardados en NY fija
         full_spots = [s.get("spot", spot_price) for s in latest_day_snaps]
         if full_spots and full_spots[-1] > 0:
             spot_price = float(full_spots[-1])
@@ -1486,12 +1506,26 @@ if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
 # largo del día: sube y baja de forma independiente según cambian OI/gamma/
 # spot, exactamente lo que se busca (cuanto más negativo el lado put, más
 # debe "bajar" esa línea, y viceversa para calls).
-today_key_drift = now_tz.strftime('%Y-%m-%d')
+# Se usa now_tz_store (NY fija) y no now_tz (por sesión) porque las llaves
+# de fecha/hora en Firebase/Supabase ahora siempre se guardan en NY,
+# independientemente de la zona horaria que cada usuario tenga elegida.
+today_key_drift = now_tz_store.strftime('%Y-%m-%d')
 today_snaps_for_drift = []
 if jsonbin_history_data and today_key_drift in jsonbin_history_data:
     today_snaps_for_drift = jsonbin_history_data.get(today_key_drift, [])
-elif is_cloud_backup and latest_supabase_snap:
-    today_snaps_for_drift = fetch_supabase_gex_history(ticker_symbol, limit=390)
+
+# Si Firebase todavía no tiene (o tiene muy pocos) snapshots de HOY -por
+# ejemplo, recién se abrió la web, o hubo un hipo momentáneo al leerlo-,
+# probamos Supabase como respaldo. Antes esto solo se intentaba dentro de
+# 'elif is_cloud_backup and latest_supabase_snap', pero is_cloud_backup
+# significa "el feed en vivo de Schwab está caído" (otra cosa totalmente
+# distinta) -no "Firebase no tiene datos de hoy"-, así que ese respaldo casi
+# nunca se activaba cuando realmente hacía falta, y NET DRIFT terminaba
+# cayendo al proxy viejo (precio x volumen) en vez de mostrar datos reales.
+if len(today_snaps_for_drift) < 2:
+    _supa_fallback = fetch_supabase_gex_history(ticker_symbol, limit=390)
+    if _supa_fallback and len(_supa_fallback) >= 2:
+        today_snaps_for_drift = _supa_fallback
 
 call_gex_by_time, put_gex_by_time, net_gex_by_time = {}, {}, {}
 for _snap in today_snaps_for_drift:
@@ -1518,7 +1552,7 @@ if has_real_drift_data:
     put_drift_raw = np.zeros(len(full_timestamps))
     net_drift_raw = np.zeros(len(full_timestamps))
     _last_c, _last_p, _last_n = 0.0, 0.0, 0.0
-    for _i, _t in enumerate(full_timestamps):
+    for _i, _t in enumerate(full_timestamps_ny):
         if _t in call_gex_by_time:
             _last_c, _last_p, _last_n = call_gex_by_time[_t], put_gex_by_time[_t], net_gex_by_time[_t]
         call_drift_raw[_i] = _last_c
@@ -2296,6 +2330,19 @@ st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 def push_to_supabase_bg(snapshot_payload):
     if supabase:
         try:
+            # Dedup: con 3 sesiones guardando cada ~60s de forma independiente,
+            # 2-3 usuarios pueden caer casi en el mismo minuto y duplicar la
+            # fila (a diferencia de Firebase, esta tabla no tenía ningún
+            # chequeo). Antes de insertar, revisamos si ya existe una entrada
+            # para este symbol+time (ambos ya vienen en hora NY fija).
+            existing = supabase.table("gex_intraday") \
+                .select("id") \
+                .eq("symbol", snapshot_payload["symbol"]) \
+                .eq("time", snapshot_payload["time"]) \
+                .limit(1) \
+                .execute()
+            if existing.data:
+                return
             supabase.table("gex_intraday").insert(snapshot_payload).execute()
         except Exception as e:
             log_to_console("Supabase Async Snapshot Error", str(e))
@@ -2336,8 +2383,10 @@ def export_snapshot_throttled():
     
     if current_time - last_export >= 60 and spot_price > 0 and not df_curr.empty:
         st.session_state.last_export_time = current_time
-        time_str = now_tz.strftime("%H:%M")
-        date_str = now_tz.strftime("%Y-%m-%d")
+        # NY fija (STORAGE_TZ) para que el mismo instante real se guarde
+        # siempre con la misma etiqueta de hora, sin importar la sesión.
+        time_str = now_tz_store.strftime("%H:%M")
+        date_str = now_tz_store.strftime("%Y-%m-%d")
 
         # El snapshot que se guarda para BACKGAMMA/backtest SIEMPRE usa la
         # expiración más cercana (0DTE), igual que el feed en vivo — nunca
