@@ -2232,13 +2232,14 @@ def push_history_entry_to_firebase(db_url, date_key, snapshot_entry):
         day_list.append(snapshot_entry)
         requests.put(day_url, json=day_list, headers={"Content-Type": "application/json"}, timeout=4)
 
-        # Poda: deja como maximo los ultimos 15 dias. shallow=true trae solo
-        # las claves de fecha (sin todo el contenido de cada dia).
+        # Poda: con snapshots cada ~60s en horario de mercado, un día ronda
+        # ~1MB en Firebase. Con el 1GB gratis de espacio, dejamos hasta 180
+        # días (~180MB) de colchón para el backtest sin acercarnos al límite.
         shallow_resp = requests.get(f"{db_url}/history.json?shallow=true", timeout=3)
         if shallow_resp.status_code == 200:
             all_dates = shallow_resp.json() or {}
-            if isinstance(all_dates, dict) and len(all_dates) > 15:
-                for old_d in sorted(all_dates.keys())[:-15]:
+            if isinstance(all_dates, dict) and len(all_dates) > 180:
+                for old_d in sorted(all_dates.keys())[:-180]:
                     requests.delete(f"{db_url}/history/{old_d}.json", timeout=3)
     except Exception as e:
         log_to_console("Firebase Async Background Push", str(e))
@@ -2721,28 +2722,155 @@ with tab_greeks:
 # --- 5. BACKGAMMA ---
 with tab_back:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
-    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📜 BACKGAMMA - HISTÓRICO DE CAPTURAS</h3>", unsafe_allow_html=True)
-    
+    st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📜 BACKGAMMA - BACKTEST DE GAMMA</h3>", unsafe_allow_html=True)
+
     if jsonbin_history_data:
         dates_avail = sorted(list(jsonbin_history_data.keys()), reverse=True)
-        sel_date = st.selectbox("Seleccionar Fecha de Historial:", dates_avail)
-        
-        day_snaps = jsonbin_history_data.get(sel_date, [])
+        sel_date = st.selectbox("Seleccionar Fecha de Historial:", dates_avail, key="backtest_sel_date")
+
+        day_snaps_raw = jsonbin_history_data.get(sel_date, [])
+        day_snaps = sorted(
+            [s for s in day_snaps_raw if isinstance(s, dict) and s.get("time")],
+            key=lambda s: s["time"]
+        )
+
         if day_snaps:
             times_hist = [s.get("time") for s in day_snaps]
             spots_hist = [s.get("spot") for s in day_snaps]
             gex_hist = [s.get("net_gex") for s in day_snaps]
-            
-            fig_back = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, subplot_titles=(f"Precio Spot ({sel_date})", "Net GEX Intradía"))
-            fig_back.add_trace(go.Scatter(x=times_hist, y=spots_hist, mode='lines+markers', name='Spot', line=dict(color='#3B82F6', width=2)), row=1, col=1)
-            fig_back.add_trace(go.Bar(x=times_hist, y=gex_hist, name='Net GEX', marker_color=['#10B981' if v>=0 else '#EF4444' for v in gex_hist]), row=2, col=1)
-            fig_back.update_layout(template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D', height=500, showlegend=False)
+            n_snaps = len(day_snaps)
+
+            # El índice del scrubber vive en session_state por fecha, para que
+            # cambiar de día no arrastre una posición fuera de rango.
+            idx_state_key = f"backtest_idx_{sel_date}"
+            if idx_state_key not in st.session_state:
+                st.session_state[idx_state_key] = n_snaps - 1
+            st.session_state[idx_state_key] = min(st.session_state[idx_state_key], n_snaps - 1)
+
+            col_play, col_speed, col_sync = st.columns([1.1, 1.6, 2.3])
+            with col_play:
+                playing = st.toggle("▶ Reproducir", key=f"backtest_playing_{sel_date}")
+            with col_speed:
+                speed_ms = st.select_slider(
+                    "Velocidad", options=[2000, 1000, 500, 250],
+                    value=1000, key=f"backtest_speed_{sel_date}"
+                )
+            with col_sync:
+                sync_qt = st.toggle("📡 Sincronizar con Quantower (Backtest)", key="backtest_sync_qt")
+
+            if playing and n_snaps > 1:
+                try:
+                    from streamlit_autorefresh import st_autorefresh
+                    st_autorefresh(interval=speed_ms, key=f"backtest_autoplay_{sel_date}")
+                except ImportError:
+                    st.components.v1.html(
+                        f"<script>setTimeout(function(){{ window.parent.postMessage({{type: 'streamlit:render'}}, '*'); location.reload(); }}, {speed_ms});</script>",
+                        height=0, width=0
+                    )
+                st.session_state[idx_state_key] = (st.session_state[idx_state_key] + 1) % n_snaps
+
+            sel_idx = st.slider(
+                "Arrastra para moverte en el tiempo:",
+                min_value=0, max_value=n_snaps - 1,
+                key=idx_state_key
+            )
+            sel_snap = day_snaps[sel_idx]
+            sel_time = sel_snap.get("time", "--:--")
+            st.caption(f"🕒 {sel_date}  {sel_time}  ·  paso {sel_idx + 1}/{n_snaps}")
+
+            # "Rastro": lo ya recorrido queda en color, lo que falta se apaga a gris.
+            colors_gex = ['#10B981' if (v or 0) >= 0 else '#EF4444' for v in gex_hist]
+            colors_gex = [c if i <= sel_idx else 'rgba(148,163,184,0.2)' for i, c in enumerate(colors_gex)]
+
+            fig_back = make_subplots(
+                rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                subplot_titles=(f"Precio Spot ({sel_date})", "Net GEX Intradía")
+            )
+            fig_back.add_trace(go.Scatter(
+                x=times_hist[:sel_idx + 1], y=spots_hist[:sel_idx + 1],
+                mode='lines', line=dict(color='#3B82F6', width=2), name='Recorrido'
+            ), row=1, col=1)
+            fig_back.add_trace(go.Scatter(
+                x=times_hist[sel_idx:], y=spots_hist[sel_idx:],
+                mode='lines', line=dict(color='rgba(148,163,184,0.25)', width=2), name='Pendiente'
+            ), row=1, col=1)
+            fig_back.add_trace(go.Scatter(
+                x=[times_hist[sel_idx]], y=[spots_hist[sel_idx]], mode='markers',
+                marker=dict(color='#FBBF24', size=13, line=dict(color='white', width=1.5)), name='Ahora'
+            ), row=1, col=1)
+            fig_back.add_trace(go.Bar(x=times_hist, y=gex_hist, marker_color=colors_gex, name='Net GEX'), row=2, col=1)
+            fig_back.update_layout(
+                template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                height=430, showlegend=False
+            )
             st.plotly_chart(fig_back, use_container_width=True)
+
+            # --- Perfil de Gamma por Strike en el instante exacto seleccionado ---
+            strikes_snap = sel_snap.get("strikes", [])
+            if strikes_snap:
+                df_snap = pd.DataFrame(strikes_snap)
+                if 'net_gex' in df_snap.columns and 'strike' in df_snap.columns:
+                    df_snap = df_snap.groupby('strike', as_index=False)['net_gex'].sum().sort_values('strike')
+                    snap_spot = float(sel_snap.get("spot", 0.0) or 0.0)
+                    b_cw1, b_cw2, b_cw3, b_pw1, b_pw2, b_pw3 = compute_call_put_walls(df_snap, snap_spot)
+
+                    fig_strike = go.Figure()
+                    fig_strike.add_trace(go.Bar(
+                        x=df_snap['strike'], y=df_snap['net_gex'],
+                        marker_color=['#10B981' if v >= 0 else '#EF4444' for v in df_snap['net_gex']]
+                    ))
+                    fig_strike.add_vline(x=snap_spot, line_dash="dash", line_color="#60A5FA",
+                                          annotation_text=f"Spot (${snap_spot:.2f})")
+                    fig_strike.update_layout(
+                        title=f"Strike Profile (Net Gamma Exposure) — {sel_date} {sel_time}",
+                        template="plotly_dark", plot_bgcolor='#06080D', paper_bgcolor='#06080D',
+                        height=420, showlegend=False, xaxis_title="Strike ($)", yaxis_title="Net GEX ($)"
+                    )
+                    st.plotly_chart(fig_strike, use_container_width=True)
+
+                    st.markdown(f"""
+                        <p style="font-family:'JetBrains Mono'; font-size:0.82rem; color:#D1D5DB;">
+                        ● <b>CW1:</b> ${b_cw1:.0f} | <b>CW2:</b> ${b_cw2:.0f} | <b>CW3:</b> ${b_cw3:.0f}<br>
+                        ● <b>PW1:</b> ${b_pw1:.0f} | <b>PW2:</b> ${b_pw2:.0f} | <b>PW3:</b> ${b_pw3:.0f}
+                        </p>
+                    """, unsafe_allow_html=True)
+
+                    if sync_qt:
+                        if FIREBASE_DB_URL:
+                            last_bt_push = st.session_state.get("last_backtest_push", 0.0)
+                            now_ts = time.time()
+                            if now_ts - last_bt_push >= 0.6:
+                                st.session_state["last_backtest_push"] = now_ts
+                                bt_levels_payload = [
+                                    {"strike": float(r['strike']), "net_gex": float(r['net_gex'])}
+                                    for _, r in df_snap.iterrows()
+                                ]
+                                bt_payload = {
+                                    "qqq_spot": snap_spot,
+                                    "conversion_ratio": float(conversion_ratio) if 'conversion_ratio' in dir() and conversion_ratio else 41.125,
+                                    "cw1": float(b_cw1), "cw2": float(b_cw2), "cw3": float(b_cw3),
+                                    "pw1": float(b_pw1), "pw2": float(b_pw2), "pw3": float(b_pw3),
+                                    "levels": bt_levels_payload,
+                                    "label": f"{sel_date} {sel_time}"
+                                }
+                                try:
+                                    requests.put(
+                                        f"{FIREBASE_DB_URL}/backtest_levels.json", json=bt_payload,
+                                        headers={"Content-Type": "application/json"}, timeout=5
+                                    )
+                                    st.sidebar.caption(f"🟣 Backtest enviado a Quantower · {sel_time}")
+                                except Exception as e:
+                                    log_to_console("Backtest Push Error", str(e))
+                        else:
+                            st.warning("Falta FIREBASE_DB_URL en secrets para poder sincronizar con Quantower.")
+            else:
+                st.info("Este snapshot no guardó el detalle por strike (capturas antiguas). Elige un snapshot más reciente.")
         else:
             st.info("No hay datos para la fecha seleccionada.")
     else:
-        st.info("No hay historial de Backgamma disponible.")
+        st.info("No hay historial de Backgamma disponible todavía. Deja la web abierta durante el mercado para que empiece a acumular capturas — el backtest solo cubre desde que la app comenzó a guardar snapshots.")
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 # --- 6. DATA ---
 with tab_data:
