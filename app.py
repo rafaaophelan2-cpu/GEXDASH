@@ -3,6 +3,7 @@ import json
 import time
 import requests
 import hashlib
+import hmac
 import threading
 import streamlit as st
 import pandas as pd
@@ -374,9 +375,29 @@ if "user_email" not in st.session_state:
 def login_user(username_in, password_in):
     user_clean = username_in.strip().lower()
     pass_clean = password_in.strip()
-    
+
     if not user_clean or not pass_clean:
         return False, "Por favor ingresa un usuario y contraseña válidos."
+
+    # --- Rate limiting básico (por sesión de navegador) ---
+    # No es un límite a nivel de servidor/IP (Streamlit no da esa capa nativa),
+    # pero corta intentos repetidos automatizados desde la misma sesión: tras
+    # 5 fallos seguidos, esa sesión queda bloqueada 60s antes de poder reintentar.
+    lockout_until = st.session_state.get("login_lockout_until", 0)
+    if time.time() < lockout_until:
+        wait_s = int(lockout_until - time.time()) + 1
+        return False, f"Demasiados intentos fallidos. Espera {wait_s}s antes de reintentar."
+
+    def _registrar_intento_fallido():
+        attempts = st.session_state.get("login_failed_attempts", 0) + 1
+        st.session_state.login_failed_attempts = attempts
+        if attempts >= 5:
+            st.session_state.login_lockout_until = time.time() + 60
+            st.session_state.login_failed_attempts = 0
+
+    def _registrar_exito():
+        st.session_state.login_failed_attempts = 0
+        st.session_state.login_lockout_until = 0
 
     if supabase:
         try:
@@ -385,9 +406,16 @@ def login_user(username_in, password_in):
             if res.data and len(res.data) > 0:
                 user_record = res.data[0]
                 db_hash = str(user_record.get('password_hash', '')).strip()
-                if db_hash == pass_hash or db_hash == pass_clean:
+                # Solo se acepta el hash SHA256 guardado en Supabase. Ya NO se
+                # acepta la contraseña en texto plano como fallback: si alguna
+                # fila de app_users quedó sin hashear, este login fallará hasta
+                # que se corrija ese registro (antes era una puerta trasera
+                # silenciosa). Comparación con hmac.compare_digest para evitar
+                # timing attacks sobre el hash.
+                if hmac.compare_digest(db_hash, pass_hash):
                     st.session_state.authenticated = True
                     st.session_state.user_email = user_record.get('username', user_clean)
+                    _registrar_exito()
                     return True, f"Bienvenido {user_record.get('name', user_clean)}"
         except Exception as e:
             log_to_console("Supabase Login Error", str(e))
@@ -396,19 +424,30 @@ def login_user(username_in, password_in):
     if valid_users:
         try:
             users_lower = {str(k).strip().lower(): str(v).strip() for k, v in valid_users.items()}
-            if user_clean in users_lower and users_lower[user_clean] == pass_clean:
+            if user_clean in users_lower and hmac.compare_digest(users_lower[user_clean], pass_clean):
                 st.session_state.authenticated = True
                 st.session_state.user_email = user_clean
+                _registrar_exito()
                 return True, "Inicio de sesión exitoso."
         except Exception as e_sec:
             log_to_console("Secrets USERS Login Error", str(e_sec))
 
-    dev_users = {"admin": "admin123", "trader": "gex2026"}
-    if user_clean in dev_users and dev_users[user_clean] == pass_clean:
-        st.session_state.authenticated = True
-        st.session_state.user_email = user_clean
-        return True, "Inicio de sesión en modo desarrollo."
+    # --- Backdoor de desarrollo: DESACTIVADO por defecto ---
+    # Antes admin/admin123 y trader/gex2026 quedaban hardcodeados y activos
+    # SIEMPRE en el código fuente — cualquiera que viera app.py (incluido
+    # este chat) podía entrar sin pasar por Supabase ni por secrets. Ahora
+    # solo funcionan si el dueño de la app agrega explícitamente
+    # ALLOW_DEV_LOGIN = "true" en .streamlit/secrets.toml. NO activar esto
+    # en la app desplegada en Streamlit Cloud (solo para pruebas locales).
+    if str(st.secrets.get("ALLOW_DEV_LOGIN", "false")).strip().lower() == "true":
+        dev_users = {"admin": "admin123", "trader": "gex2026"}
+        if user_clean in dev_users and hmac.compare_digest(dev_users[user_clean], pass_clean):
+            st.session_state.authenticated = True
+            st.session_state.user_email = user_clean
+            _registrar_exito()
+            return True, "Inicio de sesión en modo desarrollo."
 
+    _registrar_intento_fallido()
     return False, "Usuario o contraseña incorrectos."
 
 if not st.session_state.authenticated:
@@ -444,7 +483,20 @@ if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
     if supabase:
         try:
-            res = supabase.table("chat_messages").select("role, content").order("created_at", desc=False).limit(50).execute()
+            # Filtrado por usuario: antes esta consulta traía los últimos 50
+            # mensajes de TODOS los usuarios mezclados (chat global sin
+            # querer), y el botón "Limpiar" borraba esa tabla completa para
+            # los 3. Ahora cada usuario ve y borra solo su propio historial.
+            # Requiere que la tabla "chat_messages" en Supabase tenga una
+            # columna "user_email" (text, nullable) — si no existe todavía,
+            # este select puede fallar y cae al bloque except (historial
+            # vacío) sin romper la app; ver nota de la auditoría.
+            res = supabase.table("chat_messages") \
+                .select("role, content") \
+                .eq("user_email", st.session_state.get("user_email", "")) \
+                .order("created_at", desc=False) \
+                .limit(50) \
+                .execute()
             if res.data:
                 st.session_state.chat_messages = res.data
         except Exception:
@@ -461,9 +513,14 @@ def save_chat_message(role: str, content: str):
     cleaned_content = clean_ai_response(content) if role == "assistant" else content
     st.session_state.chat_messages.append({"role": role, "content": cleaned_content})
     if supabase:
+        user_email_tag = st.session_state.get("user_email", "")
         def push_chat_bg():
             try:
-                supabase.table("chat_messages").insert({"role": role, "content": cleaned_content}).execute()
+                supabase.table("chat_messages").insert({
+                    "role": role,
+                    "content": cleaned_content,
+                    "user_email": user_email_tag,
+                }).execute()
             except Exception as e:
                 log_to_console("Supabase Chat Insert Error", str(e))
         threading.Thread(target=push_chat_bg, daemon=True).start()
@@ -1093,12 +1150,15 @@ with col_head_console:
     with st.popover("💻 CONSOLA", use_container_width=True):
         st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:800; font-size:0.9rem; color:#F59E0B; margin-bottom:8px;'>💻 CONSOLA DE REGISTROS Y ERRORES</p>", unsafe_allow_html=True)
         if st.button("🗑️ Limpiar Consola", key="btn_clear_console", use_container_width=True):
+            # Antes esto borraba TODA la tabla "console_logs" de Supabase, sin
+            # filtrar por usuario — con 3 personas usando la web, cualquiera
+            # podía borrar el registro de errores de las otras dos. La tabla
+            # no tiene una columna por usuario, así que en vez de intentar un
+            # borrado parcial poco confiable, "Limpiar Consola" ahora solo
+            # limpia lo que ESTA sesión ve en pantalla; la tabla en Supabase
+            # queda intacta como bitácora compartida (útil si alguien más
+            # necesita revisar errores más tarde).
             st.session_state.console_logs = []
-            if supabase:
-                try:
-                    supabase.table("console_logs").delete().neq("id", 0).execute()
-                except Exception:
-                    pass
             st.rerun()
         
         st.markdown("---")
@@ -1336,6 +1396,12 @@ if not df_curr.empty and spot_price > 0:
     iv_str = f"{atm_iv * 100:.2f}%"
     iv_rank_str = f"{int(min(max((atm_iv / 0.35) * 100, 15), 85))}th percentile"
 else:
+    # Rama defensiva: hoy es inalcanzable en la práctica porque df_curr
+    # siempre se rellena con datos sintéticos más arriba si queda vacío
+    # (ver "if df_curr.empty:"), pero si esa lógica de fallback cambia en
+    # el futuro y este else llega a ejecutarse, T_exp debe existir igual
+    # (se usa más abajo en el cálculo de VIX/IV) para evitar un NameError.
+    T_exp = 0.5 / 365.0
     cw1, cw2, cw3 = spot_price + 5, spot_price + 10, spot_price + 15
     pw1, pw2, pw3 = spot_price - 5, spot_price - 10, spot_price - 15
     zero_gamma = spot_price
@@ -2176,10 +2242,16 @@ with st.sidebar.popover("💬 ASISTENTE IA GEX", use_container_width=True):
         st.markdown("<p style='font-family:\"JetBrains Mono\"; font-weight:800; font-size:0.85rem; color:#60A5FA; margin-bottom:2px;'>🤖 ASISTENTE CUANTITATIVO</p>", unsafe_allow_html=True)
     with col_ai_clear:
         if st.button("🗑️ Limpiar", key="btn_clear_chat", use_container_width=True):
+            # Antes borraba TODA la tabla "chat_messages" (los 3 usuarios
+            # comparten Supabase) — ahora solo borra los mensajes del
+            # usuario que apretó el botón, vía la columna "user_email".
             st.session_state.chat_messages = []
             if supabase:
                 try:
-                    supabase.table("chat_messages").delete().neq("id", 0).execute()
+                    supabase.table("chat_messages") \
+                        .delete() \
+                        .eq("user_email", st.session_state.get("user_email", "")) \
+                        .execute()
                 except Exception:
                     pass
             st.rerun()
@@ -2354,20 +2426,48 @@ def push_to_supabase_bg(snapshot_payload):
         except Exception as e:
             log_to_console("Supabase Async Snapshot Error", str(e))
 
-def push_history_entry_to_firebase(db_url, date_key, snapshot_entry):
+def push_history_entry_to_firebase(db_url, date_key, snapshot_entry, max_retries=3):
     try:
         day_url = f"{db_url}/history/{date_key}.json"
-        resp = requests.get(day_url, timeout=3)
-        day_list = resp.json() if resp.status_code == 200 else None
-        if not isinstance(day_list, list):
-            day_list = []
 
-        existing_times = [s.get("time") for s in day_list if isinstance(s, dict)]
-        if snapshot_entry["time"] in existing_times:
-            return
+        # Lectura-modificación-escritura protegida con ETag condicional de
+        # Firebase (ver https://firebase.google.com/docs/reference/rest/database
+        # -> "ETags y escrituras condicionales"). Sin esto, con varios usuarios
+        # guardando snapshots casi al mismo tiempo, dos lecturas pueden partir
+        # del mismo array y el segundo PUT pisa silenciosamente al primero
+        # (se pierde un snapshot). Con ETag: si el PUT no matchea (412 =
+        # alguien más escribió en el medio), se vuelve a leer el estado
+        # fresco y se reintenta, en vez de sobreescribir a ciegas.
+        for attempt in range(max_retries):
+            resp = requests.get(day_url, headers={"X-Firebase-ETag": "true"}, timeout=3)
+            etag = resp.headers.get("ETag")
+            day_list = resp.json() if resp.status_code == 200 else None
+            if not isinstance(day_list, list):
+                day_list = []
 
-        day_list.append(snapshot_entry)
-        requests.put(day_url, json=day_list, headers={"Content-Type": "application/json"}, timeout=4)
+            existing_times = [s.get("time") for s in day_list if isinstance(s, dict)]
+            if snapshot_entry["time"] in existing_times:
+                return
+
+            day_list.append(snapshot_entry)
+            put_headers = {"Content-Type": "application/json"}
+            if etag:
+                put_headers["if-Match"] = etag
+            put_resp = requests.put(day_url, json=day_list, headers=put_headers, timeout=4)
+
+            if put_resp.status_code == 200:
+                break
+            if put_resp.status_code == 412:
+                # Otro usuario escribió entre nuestro GET y nuestro PUT:
+                # reintentar desde el principio con datos frescos.
+                continue
+            # Cualquier otro error (red, 4xx/5xx no relacionado a ETag): no
+            # tiene sentido seguir reintentando en bucle, se deja constancia
+            # en la consola y se sigue con la poda de todas formas.
+            log_to_console("Firebase History Push", f"HTTP {put_resp.status_code}: {put_resp.text[:200]}")
+            break
+        else:
+            log_to_console("Firebase History Push", f"Se agotaron los {max_retries} reintentos por conflicto de ETag (412).")
 
         # Poda: con snapshots cada ~60s en horario de mercado, un día ronda
         # ~1MB en Firebase. Con el 1GB gratis de espacio, dejamos hasta 180
