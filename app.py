@@ -2795,15 +2795,26 @@ with tab_drift:
         spot_max_change = max(abs(spot_change).max(), 0.001)
         spot_scaled = (spot_change / spot_max_change) * drift_max
 
+        # Calls y Puts se grafican por MAGNITUD ABSOLUTA (np.abs), no por su
+        # valor con signo: a pedido del usuario, la línea con el monto más
+        # grande en dólares debe quedar más arriba en el gráfico sin importar
+        # si el dato original es positivo (calls) o negativo (puts, por
+        # convención de GEX). El signo real no se pierde: sigue visible en el
+        # encabezado y en el hover (customdata usa el valor con signo).
+        # 'Net' (Calls - Puts) SÍ se deja con signo, porque ahí el signo es
+        # justamente lo que se quiere leer (sesgo alcista/bajista neto).
+        call_drift_plot = np.abs(call_drift_raw)
+        put_drift_plot = np.abs(put_drift_raw)
+
         fig_drift.add_trace(go.Scatter(
-            x=full_timestamps, y=call_drift_raw, mode='lines', name='Calls',
+            x=full_timestamps, y=call_drift_plot, mode='lines', name='Calls',
             line=dict(color='#10B981', width=2),
             hovertemplate="<b>Hora:</b> %{x}<br><b>Calls:</b> %{customdata}<extra></extra>",
             customdata=[fmt_val(v) for v in call_drift_raw]
         ), row=1, col=1)
 
         fig_drift.add_trace(go.Scatter(
-            x=full_timestamps, y=put_drift_raw, mode='lines', name='Puts',
+            x=full_timestamps, y=put_drift_plot, mode='lines', name='Puts',
             line=dict(color='#EF4444', width=2),
             hovertemplate="<b>Hora:</b> %{x}<br><b>Puts:</b> %{customdata}<extra></extra>",
             customdata=[fmt_val(v) for v in put_drift_raw]
