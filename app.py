@@ -2921,11 +2921,20 @@ with tab_back:
                     )
                 st.session_state[idx_state_key] = (st.session_state[idx_state_key] + 1) % n_snaps
 
-            sel_idx = st.slider(
-                "Arrastra para moverte en el tiempo:",
-                min_value=0, max_value=n_snaps - 1,
-                key=idx_state_key
-            )
+            if n_snaps > 1:
+                sel_idx = st.slider(
+                    "Arrastra para moverte en el tiempo:",
+                    min_value=0, max_value=n_snaps - 1,
+                    key=idx_state_key
+                )
+            else:
+                # st.slider no acepta min_value == max_value (lanza
+                # StreamlitInvalidMinMaxError) — con un solo snapshot ese día
+                # no hay nada que arrastrar, así que se fija el índice en 0
+                # directamente sin dibujar el slider.
+                sel_idx = 0
+                st.session_state[idx_state_key] = 0
+                st.caption("Solo hay 1 snapshot guardado para esta fecha — el scrubber aparece cuando haya 2 o más.")
             sel_snap = day_snaps[sel_idx]
             sel_time = sel_snap.get("time", "--:--")
             st.caption(f"🕒 {sel_date}  {sel_time}  ·  paso {sel_idx + 1}/{n_snaps}")
