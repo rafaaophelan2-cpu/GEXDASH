@@ -574,7 +574,7 @@ def query_groq(system_prompt, user_prompt, api_key):
         from groq import Groq
         groq_client = Groq(api_key=api_key)
         completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -588,7 +588,7 @@ def query_groq(system_prompt, user_prompt, api_key):
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "llama-3.3-70b-versatile",
+            "model": "openai/gpt-oss-120b",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
