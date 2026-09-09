@@ -1187,6 +1187,25 @@ def compute_call_put_walls(df_grouped, spot_ref, gap=2.0):
 
     return cw1, cw2, cw3, pw1, pw2, pw3
 
+def get_nearest_dte_subset(df_source):
+    """
+    Devuelve el subconjunto de df_source correspondiente a la expiración
+    con menor DTE (0DTE cuando existe), de forma determinística e
+    independiente de cualquier selección de DTE que cualquier sesión/usuario
+    tenga en pantalla en ese momento (session_state es por sesión, así que
+    no se puede usar como fuente de verdad para datos que se comparten
+    entre sesiones o se guardan a Firebase/Supabase). Si no hay columnas
+    'exp_key'/'dte' disponibles, devuelve df_source completo sin filtrar.
+    """
+    if df_source is None or df_source.empty:
+        return df_source
+    if 'exp_key' in df_source.columns and 'dte' in df_source.columns:
+        nearest_key = df_source.sort_values('dte')['exp_key'].iloc[0]
+        df_sel = df_source[df_source['exp_key'] == nearest_key]
+        if not df_sel.empty:
+            return df_sel
+    return df_source
+
 if not df_curr.empty and spot_price > 0:
     # NOTA: antes esta condicion tambien exigia "exp_0dte is not None", lo que
     # acoplaba el calculo de TODAS las Griegas (DEX/TEX/VEX/CHEX/VANNA) e incluso
@@ -1376,13 +1395,11 @@ def export_live_levels_to_quantower():
     # En vez de eso, el feed siempre usa una regla fija y determinística:
     # la expiración más cercana (0DTE), igual sin importar cuántas sesiones
     # haya abiertas ni qué esté mirando cada quien en pantalla.
-    if 'exp_key' in df_curr.columns and 'dte' in df_curr.columns and not df_curr.empty:
-        nearest_dte_keys = [df_curr.sort_values('dte')['exp_key'].iloc[0]]
-        df_sel = df_curr[df_curr['exp_key'].isin(nearest_dte_keys)]
-        if not df_sel.empty:
-            df_levels_source = df_sel
-            df_walls_live = df_sel.groupby('strike', as_index=False)['net_gex'].sum()
-            live_cw1, live_cw2, live_cw3, live_pw1, live_pw2, live_pw3 = compute_call_put_walls(df_walls_live, spot_price)
+    df_sel = get_nearest_dte_subset(df_curr)
+    if not df_sel.empty and df_sel is not df_curr:
+        df_levels_source = df_sel
+        df_walls_live = df_sel.groupby('strike', as_index=False)['net_gex'].sum()
+        live_cw1, live_cw2, live_cw3, live_pw1, live_pw2, live_pw3 = compute_call_put_walls(df_walls_live, spot_price)
 
     df_levels = df_levels_source.groupby('strike', as_index=False)['net_gex'].sum().sort_values('strike')
     levels_payload = [
@@ -1639,7 +1656,49 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
 """
 
 def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
+                 def get_intraday_context(hist_df, current_price):
+    """
+    Resume el movimiento de precio de HOY (apertura, máximo, mínimo, y el
+    movimiento de los últimos ~30 minutos) para que la IA pueda razonar
+    escenarios coherentes con lo que el precio YA hizo, en vez de proponer
+    entradas/objetivos desconectados del movimiento reciente.
+    """
+    if hist_df is None or hist_df.empty or 'Close' not in hist_df.columns:
+        return "Sin datos de velas intradía disponibles todavía."
+    try:
+        day_high = float(hist_df['High'].max())
+        day_low = float(hist_df['Low'].min())
+        day_open = float(hist_df['Open'].iloc[0])
+        rango_total = max(day_high - day_low, 0.01)
+
+        recent_window = hist_df.tail(30)
+        move_pts = 0.0
+        move_min = 0
+        if not recent_window.empty:
+            move_start = float(recent_window['Close'].iloc[0])
+            move_pts = current_price - move_start
+            move_min = len(recent_window)
+
+        if current_price > (day_low + rango_total * 0.66):
+            posicion_rango = "en la parte ALTA"
+        elif current_price < (day_low + rango_total * 0.33):
+            posicion_rango = "en la parte BAJA"
+        else:
+            posicion_rango = "en la zona MEDIA"
+
+        direccion = "al alza" if move_pts > 0.05 else "a la baja" if move_pts < -0.05 else "prácticamente lateral"
+
+        return (
+            f"Apertura de hoy: {day_open:.2f} | Máximo del día: {day_high:.2f} | "
+            f"Mínimo del día: {day_low:.2f} | Rango recorrido hoy: {rango_total:.2f} pts. "
+            f"El precio actual está {posicion_rango} de ese rango. "
+            f"En los últimos {move_min} min se movió {move_pts:+.2f} pts ({direccion})."
+        )
+    except Exception:
+        return "Sin datos de velas intradía disponibles todavía."
+
                   metrics_override=None, dte_context_label=None, spot_override=None):
+
     """
     metrics_override: dict opcional (salida de compute_metrics_for_dte) para que
     el analisis use los niveles/griegas de un DTE especifico en vez de los
@@ -1675,27 +1734,40 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
     iv_str_ia = m.get("iv_str", iv_str)
     iv_rank_str_ia = m.get("iv_rank_str", iv_rank_str)
 
-    dte_note = (
-        f"\n    NOTA IMPORTANTE: Este analisis se genera EXCLUSIVAMENTE con los datos de la(s) expiracion(es): {dte_context_label}.\n"
+        dte_note = (
+        f"NOTA IMPORTANTE: Este analisis se genera EXCLUSIVAMENTE con los datos de la(s) expiracion(es): {dte_context_label}."
         if dte_context_label else ""
     )
 
     manual_price_note = (
-        f"\n    NOTA: El precio de {ticker_symbol} fue ingresado manualmente por el usuario (${spot_ia:.2f}) "
+        f"NOTA: El precio de {ticker_symbol} fue ingresado manualmente por el usuario (${spot_ia:.2f}) "
         f"porque el precio automatico estaba desactualizado (ej. feriado bursatil, divergencia ETH/RTH). "
-        f"Usa este precio como el spot real vigente para todo el analisis.\n"
+        f"Usa este precio como el spot real vigente para todo el analisis."
         if spot_override and spot_override > 0 else ""
     )
 
+    intraday_context = get_intraday_context(hist_raw, spot_ia)
+
     system_prompt = f"""
-    Eres un analista cuantitativo institucional experto en opciones y estratega de mercado en el GEX Quant Terminal.
-    Tu objetivo es entregar un análisis técnico, estructurado y profundo para {ticker_symbol}. {dte_note}{manual_price_note}
+    Eres un analista de order flow y estratega de day trading/scalping especializado en opciones y futuros de Nasdaq (NQ/MNQ), operando dentro del GEX Quant Terminal. {dte_note}{manual_price_note}
+
+    PERFIL DEL TRADER AL QUE ASESORAS (condiciona TODA tu respuesta):
+    - Opera intradía puro: sus trades duran entre 5 y 30 minutos, NUNCA "swing".
+    - Usa footprint chart, cumulative delta y volume profile como herramientas de ejecución. Tú no tienes esos datos en vivo, pero debes razonar en esos términos: absorción, agresión compradora/vendedora, mecha de rechazo, POC, nodos de alto/bajo volumen (HVN/LVN).
+    - Opera MNQ/NQ (Nasdaq), pero tus niveles de referencia (Call/Put Walls, Zero Gamma) están en {ticker_symbol} — factor de conversión: {conversion_ratio_ia:.4f}.
+    - NUNCA propongas objetivos (TP) de tipo swing. Los objetivos deben ser alcanzables en minutos, no en días.
+
+    REGLAS DURAS DE COHERENCIA DE PRECIOS (verifícalas numéricamente antes de responder; si las violas, la respuesta es inútil para este trader):
+    1. El precio actual de {ticker_symbol} es {spot_ia:.2f}. Toda entrada que propongas debe estar razonablemente cerca de este precio (un pullback/retest lógico), nunca en un nivel ya lejano que implique que el precio ya recorrió gran parte del movimiento.
+    2. En un LONG: el Take Profit SIEMPRE debe ser un precio MAYOR que el de entrada. En un SHORT: el Take Profit SIEMPRE debe ser un precio MENOR que el de entrada.
+    3. NO propongas cazar una reversión (short después de una caída fuerte, o long después de una subida fuerte) sin una razón estructural explícita (rechazo confirmado en un nivel de gamma, agotamiento de la mecha, absorción visible). Nunca sugieras "shortear" muy por debajo de donde ya cayó el precio, ni "comprar" muy por encima de donde ya subió, sin ese sustento.
+    4. Usa el contexto de movimiento reciente de abajo para calibrar tus escenarios: si ya hubo un movimiento grande y reciente, prioriza continuación con retest o agotamiento en un nivel específico — no ignores que el movimiento ya ocurrió.
+
+    CONTEXTO DE PRECIO INTRADÍA (movimiento ya ocurrido hoy — ÚSALO, no lo ignores):
+    {intraday_context}
 
     DATOS DEL MERCADO EN TIEMPO REAL ({ticker_symbol}):
     - Ticker: {ticker_symbol} | Spot Price: {spot_ia:.2f} USD | Ratio NQ: {conversion_ratio_ia:.4f}
-
-    DATOS DEL MERCADO EN TIEMPO REAL ({ticker_symbol}):
-    - Ticker: {ticker_symbol} | Spot Price: {spot_price:.2f} USD | Ratio NQ: {conversion_ratio:.4f}
     - Índice VIX: {vix_val:.2f} ({vix_status} - {vix_desc})
     - Volatilidad Implícita (IV ATM): {iv_str_ia} | Percentil Rank: {iv_rank_str_ia}
     - Régimen de Gamma: {regime_str_ia} ({condition_str_ia})
@@ -1707,21 +1779,25 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
     - Vega Exposure (VEX): {net_vex_val:,.0f} USD/1% IV | Charm Exposure (CHEX): {net_chex_val:.2f}M USD/día | Vanna (VANNA): {net_vanna_val:.2f}M USD
     - Net Premium Drift: {fmt_val(last_net_drift).replace('$', '')} USD
 
-    REGLAS DE INTERPRETACIÓN DEL VIX:
-    1. VIX < 15: Volatilidad calmada y baja. Recomendar TPs no muy largos ya que los movimientos no son expansivos.
-    2. VIX 15-30 (15-24 media, 25-30 alta): Es la volatilidad más sana para el mercado. Rango ideal para mantener runners (TPs más largos).
-    3. VIX > 30: Volatilidad muy alta, mucho miedo en el mercado y movimientos muy expansivos.
+    REGLAS DE INTERPRETACIÓN DEL VIX (para scalping, no para swing):
+    1. VIX < 15: Volatilidad calmada. Rango intradía comprimido — objetivos de scalp más cortos de lo normal.
+    2. VIX 15-30 (15-24 media, 25-30 alta): Volatilidad sana, rango intradía amplio — es donde mejor rinde el scalping.
+    3. VIX > 30: Volatilidad muy alta, mechas violentas — exige confirmación de absorción antes de entrar, evita perseguir el primer impulso.
+
+    CÓMO RAZONAR LOS ESCENARIOS (reemplaza cualquier plantilla genérica de niveles sueltos):
+    Cada escenario debe explicar el MECANISMO, no solo tirar un número. Ejemplo: al romper y sostenerse por encima de un Call Wall dominante, los market makers que estaban cortos gamma dejan de necesitar comprar futuros para cubrirse en ese nivel — se retira un freno estructural y el camino de menor resistencia gamma queda abierto hacia el siguiente nivel (normalmente el próximo Call Wall o el Zero Gamma). Razona así, con causa y efecto.
+    Apóyate en los conceptos de order flow que tu trader sí puede confirmar en su footprint/cumulative delta/volume profile: menciona qué debería ver ahí para validar cada escenario (ej. "confirmar con absorción de vendedores en el footprint antes de sumar tamaño", "buscar una mecha de rechazo con reversión de delta acumulado", "vigilar si el volumen se apila como nodo de alto volumen (POC) en la zona, o si es zona de bajo volumen y por tanto de tránsito rápido").
 
     REGLAS DE RESPUESTA OBLIGATORIAS:
     1. NO respondas con mensajes vacíos o saludos genéricos.
-    2. DEBES incluir obligatoriamente las siguientes secciones en el análisis:
-       **1. Estado Actual y Régimen del Mercado** (incluyendo el diagnóstico explícito del VIX)
-       **2. Puntos Clave de Inflexión y Niveles Operativos**
-       **3. Análisis de Flujo y Griegas (DEX, VEX, CHEX, VANNA, Net Drift)**
-       **4. Escenarios Operativos Cuantitativos (DETALLAR DE MANERA OBLIGATORIA CON PRECIOS EXACTOS):**
-          * **Escenario A (Continuación / Retesteo Aceptado)**: Detalla el comportamiento si el precio rompe y sostiene un nivel clave (CW1={cw1_ia:.0f} o PW1={pw1_ia:.0f}), especificando los precios exactos de entrada y objetivo.
-          * **Escenario B (Rechazo en Nivel Clave)**: Detalla qué ocurre al rebotar o ser rechazado en la resistencia/soporte principal (CW1 o PW1), con sus precios reales de entrada y objetivos hacia Zero Gamma ({zero_gamma_ia:.2f}).
-          * **Escenario C (Trampa / Falsa Ruptura)**: Detalla la maniobra de barrido de liquidez (falsa ruptura por encima de CW1 o debajo de PW1) y el precio numérico de reversión esperado.
+    2. DEBES incluir obligatoriamente las siguientes secciones:
+       **1. Estado Actual y Contexto Intradía** (régimen de gamma, VIX, y qué ha hecho el precio hoy — usa el contexto de arriba)
+       **2. Niveles Operativos Relevantes para Scalping** (solo los 1-2 niveles MÁS relevantes dado dónde está el precio ahora, no los seis de memoria)
+       **3. Qué Vigilar en Order Flow** (absorción, delta acumulado, volume profile, mechas de rechazo — en términos de qué confirmaría o invalidaría cada escenario)
+       **4. Escenarios Operativos de Scalping (5-30 min, ENTRADA/TP COHERENTES CON EL PRECIO ACTUAL Y EL MOVIMIENTO RECIENTE):**
+          * **Escenario A (Ruptura y Continuación)**: si rompe y sostiene el nivel dominante más cercano al precio actual, hacia dónde iría y POR QUÉ (mecanismo de hedging), con entrada y TP numéricos coherentes.
+          * **Escenario B (Rechazo en Nivel Clave)**: si el precio reacciona en el nivel dominante más cercano, con entrada y TP numéricos coherentes hacia el nivel opuesto o Zero Gamma.
+          * **Escenario C (Trampa / Falsa Ruptura)**: barrido de liquidez y reversión, con precio de invalidación y objetivo numérico.
     3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$). Usa fuentes y letras normales en USD.
     """
 
@@ -2255,21 +2331,34 @@ def export_snapshot_throttled():
         st.session_state.last_export_time = current_time
         time_str = now_tz.strftime("%H:%M")
         date_str = now_tz.strftime("%Y-%m-%d")
-        
-        strikes_payload = []
-        for _, r in df_curr.iterrows():
-            strikes_payload.append({
+
+        # El snapshot que se guarda para BACKGAMMA/backtest SIEMPRE usa la
+        # expiración más cercana (0DTE), igual que el feed en vivo — nunca
+        # la que cualquier sesión tenga seleccionada en pantalla. Antes esto
+        # mezclaba dos fuentes distintas dentro del mismo snapshot: el total
+        # ("net_gex") salía filtrado por el DTE de sesión (df_header_filtered),
+        # mientras que el detalle por strike ("strikes") salía de TODAS las
+        # expiraciones sin filtrar ni agrupar — lo que podía mostrar un total
+        # negativo mientras el perfil por strike se veía claramente dominado
+        # por barras verdes (positivas), como reportado.
+        df_snapshot_source = get_nearest_dte_subset(df_curr)
+        df_snapshot_grouped = df_snapshot_source.groupby('strike', as_index=False)[['call_gex', 'put_gex', 'net_gex']].sum()
+
+        strikes_payload = [
+            {
                 "strike": float(r['strike']),
                 "net_gex": float(r.get('net_gex', 0.0)),
                 "call_gex": float(r.get('call_gex', 0.0)),
                 "put_gex": float(r.get('put_gex', 0.0))
-            })
-        
+            }
+            for _, r in df_snapshot_grouped.iterrows()
+        ]
+
         snapshot_entry = {
             "symbol": ticker_symbol,
             "time": time_str,
             "spot": float(spot_price),
-            "net_gex": float(net_gex_total),
+            "net_gex": float(df_snapshot_grouped['net_gex'].sum()),
             "strikes": strikes_payload
         }
         
