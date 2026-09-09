@@ -403,7 +403,6 @@ def login_user(username_in, password_in):
         except Exception as e_sec:
             log_to_console("Secrets USERS Login Error", str(e_sec))
 
-    dev_users = {"admin": "admin123", "trader": "gex2026"}
     if user_clean in dev_users and dev_users[user_clean] == pass_clean:
         st.session_state.authenticated = True
         st.session_state.user_email = user_clean
