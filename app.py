@@ -1489,7 +1489,14 @@ def compute_z_matrix_cached(fine_strikes_arr, full_spots_arr, df_records, min_st
     return Z_mat
 
 if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
-    records_dict = df_curr[['strike', 'openInterest_c', 'openInterest_p']].to_dict('records') if not df_curr.empty else []
+    # Mismo criterio que el feed en vivo a Quantower y el fix #5 de snapshots:
+    # el heatmap de LIVE GAMMA debe reflejar SOLO la expiración más cercana
+    # (0DTE), no todas las expiraciones combinadas. Antes se usaba df_curr sin
+    # filtrar, sumando el open interest de TODAS las expiraciones por strike
+    # (cada una con su propia campana gaussiana), lo que inflaba el heatmap
+    # muy por encima del net_gex real de 0DTE que muestra GEX INFO.
+    df_live_gamma_source = get_nearest_dte_subset(df_curr)
+    records_dict = df_live_gamma_source[['strike', 'openInterest_c', 'openInterest_p']].to_dict('records') if not df_live_gamma_source.empty else []
     Z_matrix_real = compute_z_matrix_cached(fine_strikes, np.array(full_spots), records_dict, min_strike, max_strike, atm_iv, T_exp)
 
 # --- Net Drift: histórico REAL de Call/Put GEX (no un proxy de precio) ---
