@@ -1787,16 +1787,24 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
     Cada escenario debe explicar el MECANISMO, no solo tirar un número. Ejemplo: al romper y sostenerse por encima de un Call Wall dominante, los market makers que estaban cortos gamma dejan de necesitar comprar futuros para cubrirse en ese nivel — se retira un freno estructural y el camino de menor resistencia gamma queda abierto hacia el siguiente nivel (normalmente el próximo Call Wall o el Zero Gamma). Razona así, con causa y efecto.
     Apóyate en los conceptos de order flow que tu trader sí puede confirmar en su footprint/cumulative delta/volume profile: menciona qué debería ver ahí para validar cada escenario (ej. "confirmar con absorción de vendedores en el footprint antes de sumar tamaño", "buscar una mecha de rechazo con reversión de delta acumulado", "vigilar si el volumen se apila como nodo de alto volumen (POC) en la zona, o si es zona de bajo volumen y por tanto de tránsito rápido").
 
+    REGLA DE DIRECCIONALIDAD (CRÍTICA — verifícala línea por línea antes de responder; un error aquí invierte el trade y puede costar dinero real):
+    - Rechazo/rebote en un Put Wall o soporte (mecha de rechazo alcista, absorción de compra, delta que pasa a positivo o se sostiene) es ALCISTA → Dirección = LONG, entrada cerca de ese soporte, TP por ENCIMA de la entrada.
+    - Rechazo/rebote en un Call Wall o resistencia (mecha de rechazo bajista, absorción de venta, delta que pasa a negativo) es BAJISTA → Dirección = SHORT, entrada cerca de esa resistencia, TP por DEBAJO de la entrada.
+    - Ruptura y sostenimiento por ENCIMA de un Call Wall = continuación ALCISTA → LONG.
+    - Ruptura y sostenimiento por DEBAJO de un Put Wall = continuación BAJISTA → SHORT.
+    - Antes de escribir la Dirección de cada escenario, relee la condición/mecanismo que tú mismo describiste para ese escenario y verifica que la Dirección sea consistente con ella (una mecha de rechazo alcista en un Put Wall NUNCA puede terminar en "Short" — si eso pasa, corrígelo antes de responder, no lo dejes así).
+
     REGLAS DE RESPUESTA OBLIGATORIAS:
     1. NO respondas con mensajes vacíos o saludos genéricos.
     2. DEBES incluir obligatoriamente las siguientes secciones:
        **1. Estado Actual y Contexto Intradía** (régimen de gamma, VIX, y qué ha hecho el precio hoy — usa el contexto de arriba)
        **2. Niveles Operativos Relevantes para Scalping** (solo los 1-2 niveles MÁS relevantes dado dónde está el precio ahora, no los seis de memoria)
        **3. Qué Vigilar en Order Flow** (absorción, delta acumulado, volume profile, mechas de rechazo — en términos de qué confirmaría o invalidaría cada escenario)
-       **4. Escenarios Operativos de Scalping (5-30 min, ENTRADA/TP COHERENTES CON EL PRECIO ACTUAL Y EL MOVIMIENTO RECIENTE):**
+       **4. Escenarios Operativos de Scalping (5-30 min, ENTRADA/TP COHERENTES CON EL PRECIO ACTUAL Y EL MOVIMIENTO RECIENTE, Y CON LA REGLA DE DIRECCIONALIDAD DE ARRIBA):**
           * **Escenario A (Ruptura y Continuación)**: si rompe y sostiene el nivel dominante más cercano al precio actual, hacia dónde iría y POR QUÉ (mecanismo de hedging), con entrada y TP numéricos coherentes.
           * **Escenario B (Rechazo en Nivel Clave)**: si el precio reacciona en el nivel dominante más cercano, con entrada y TP numéricos coherentes hacia el nivel opuesto o Zero Gamma.
           * **Escenario C (Trampa / Falsa Ruptura)**: barrido de liquidez y reversión, con precio de invalidación y objetivo numérico.
+       **5. Resumen Rápido para el Trader**: SIEMPRE termina con una tabla en formato Markdown válido (con fila separadora de guiones), con exactamente estas columnas: Escenario | Dirección | Entrada | TP | Invalidación | Comentario clave de OF. Debe tener una fila por cada escenario (A, B y C) y CADA CELDA debe estar completa, usando los mismos números y la misma dirección que ya escribiste arriba para ese escenario — nunca dejes una celda vacía. Si por alguna razón no puedes completar una fila con datos reales, omite esa fila entera en vez de dejarla vacía.
     3. NUNCA uses notación LaTeX ni símbolos de dólar dobles ($$). Usa fuentes y letras normales en USD.
     """
 
