@@ -1655,8 +1655,7 @@ def generar_analisis_local(ticker, spot, net_gex, regime, condition,
   - **Barrido Inferior**: Falsa ruptura de PW1 cayendo hasta **${sweep_low:.2f} USD** para activar stops de compradores y revertir velozmente por encima de ${pw1_v:.0f} USD. **Precio Numérico de Reversión Esperado**: ${rev_target_low:.2f} USD.
 """
 
-def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
-                 def get_intraday_context(hist_df, current_price):
+def get_intraday_context(hist_df, current_price):
     """
     Resume el movimiento de precio de HOY (apertura, máximo, mínimo, y el
     movimiento de los últimos ~30 minutos) para que la IA pueda razonar
@@ -1697,8 +1696,8 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
     except Exception:
         return "Sin datos de velas intradía disponibles todavía."
 
+def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
                   metrics_override=None, dte_context_label=None, spot_override=None):
-
     """
     metrics_override: dict opcional (salida de compute_metrics_for_dte) para que
     el analisis use los niveles/griegas de un DTE especifico en vez de los
@@ -1734,7 +1733,7 @@ def consultar_ia(tipo_analisis="Análisis General", mensaje_usuario=None,
     iv_str_ia = m.get("iv_str", iv_str)
     iv_rank_str_ia = m.get("iv_rank_str", iv_rank_str)
 
-        dte_note = (
+    dte_note = (
         f"NOTA IMPORTANTE: Este analisis se genera EXCLUSIVAMENTE con los datos de la(s) expiracion(es): {dte_context_label}."
         if dte_context_label else ""
     )
