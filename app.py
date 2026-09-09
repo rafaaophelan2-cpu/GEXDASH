@@ -576,8 +576,29 @@ client = get_schwab_client()
 # Streamlit) para que, si una llamada falla igual, se sirva el último dato
 # válido conocido en vez de un resultado vacío -y así un fallo transitorio en
 # una sesión nunca "vacía" el gráfico de las otras-.
-_schwab_client_lock = threading.Lock()
-_schwab_last_good = {}
+#
+# BUG ENCONTRADO (el que reporta el usuario: "si a una persona le recargan
+# los datos de GEX INFO, a las demás se les borran todos los datos"):
+# Streamlit re-ejecuta TODO app.py de arriba a abajo en CADA rerun, de
+# CUALQUIER sesión, dentro del MISMO proceso. Como `_schwab_client_lock` y
+# `_schwab_last_good` estaban declaradas como variables de módulo normales
+# (`= threading.Lock()` / `= {}`), esa línea se volvía a ejecutar en TODOS
+# los reruns de TODOS los usuarios -no solo una vez por proceso- pisando
+# `_schwab_last_good` con un diccionario vacío nuevo cada vez. Es decir: el
+# propio mecanismo de "último dato bueno" se autodestruía en cada rerun de
+# cualquier sesión (por ejemplo, al recargar GEX INFO), dejando a las demás
+# sesiones sin fallback hasta su siguiente fetch exitoso -exactamente el
+# síntoma reportado-.
+#
+# Fix: envolver la creación en @st.cache_resource, que SÍ se ejecuta una
+# única vez por proceso (compartido entre todas las sesiones) y devuelve
+# siempre la MISMA instancia de Lock/dict en los reruns siguientes, sin
+# volver a inicializarlos vacíos.
+@st.cache_resource
+def _get_schwab_shared_state():
+    return threading.Lock(), {}
+
+_schwab_client_lock, _schwab_last_good = _get_schwab_shared_state()
 
 def _schwab_call_with_fallback(cache_key, empty_value, fetch_fn):
     """Ejecuta fetch_fn() serializado por _schwab_client_lock. Si devuelve un
