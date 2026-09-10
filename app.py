@@ -2480,7 +2480,16 @@ if not df_header_filtered.empty and 'net_gex' in df_header_filtered.columns:
     # subestimar un strike cuyo volumen está repartido entre varias
     # expiraciones. Dominancia por SIGNO del net_gex (ver compute_call_put_walls).
     df_hdr_gex_by_strike = df_hdr_sorted.groupby('strike', as_index=False)[['call_gex', 'put_gex', 'net_gex']].sum() if {'call_gex', 'put_gex', 'net_gex'}.issubset(df_hdr_sorted.columns) else pd.DataFrame()
-    cw1, _cw2_hdr, _cw3_hdr, pw1, _pw2_hdr, _pw3_hdr = compute_call_put_walls(df_hdr_gex_by_strike, spot_price)
+    # FIX: antes solo se reasignaban cw1/pw1 aquí (cw2, cw3, pw2, pw3 se
+    # descartaban en variables basura _cw2_hdr/_cw3_hdr/_pw2_hdr/_pw3_hdr),
+    # dejando esos 4 niveles "congelados" con el cálculo de TODAS las
+    # expiraciones (línea ~1477) mientras cw1/pw1 sí reflejaban el filtro de
+    # DTE elegido en el selector 📂 DTE. Como LIVE GAMMA dibuja sus 6 líneas
+    # (Call/Put Wall 1-2-3) con estas mismas variables globales, CW1/PW1
+    # quedaban consistentes con el filtro pero CW2/CW3/PW2/PW3 no — de ahí
+    # la divergencia entre GEX INFO y LIVE GAMMA. Ahora las 6 se reasignan
+    # juntas, así todas respetan el mismo filtro de DTE.
+    cw1, cw2, cw3, pw1, pw2, pw3 = compute_call_put_walls(df_hdr_gex_by_strike, spot_price)
 
     df_hdr_sorted['cum_gex'] = df_hdr_sorted['net_gex'].cumsum()
     zero_gamma = spot_price
