@@ -73,59 +73,53 @@ supabase: Client = get_supabase_client()
 def fetch_supabase_latest_snapshot(symbol="QQQ"):
     if not supabase:
         return None
-
-    def _do_fetch():
+    try:
+        res = supabase.table("gex_intraday") \
+            .select("*") \
+            .eq("symbol", symbol) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        if res.data and len(res.data) > 0:
+            return res.data[0]
+    except Exception as e:
         try:
             res = supabase.table("gex_intraday") \
                 .select("*") \
                 .eq("symbol", symbol) \
-                .order("created_at", desc=True) \
                 .limit(1) \
                 .execute()
             if res.data and len(res.data) > 0:
                 return res.data[0]
-        except Exception:
-            res = supabase.table("gex_intraday") \
-                .select("*") \
-                .eq("symbol", symbol) \
-                .limit(1) \
-                .execute()
-            if res.data and len(res.data) > 0:
-                return res.data[0]
-        return None
-
-    # Ver comentario junto a _cloud_call_with_fallback (más abajo) para el
-    # porqué de este wrapper: sin él, un hipo de red puntual en ESTA lectura
-    # de 1s de TTL dejaba `None` guardado en el caché compartido por TODOS
-    # los usuarios conectados durante ese segundo.
-    return _cloud_call_with_fallback(f"latest_snapshot:{symbol}", None, _do_fetch)
+        except Exception as e2:
+            log_to_console("Supabase Snapshot Fetch Error", str(e2))
+    return None
 
 @st.cache_data(ttl=2)
 def fetch_supabase_gex_history(symbol="QQQ", limit=100):
     if not supabase:
         return []
-
-    def _do_fetch():
+    try:
+        res = supabase.table("gex_intraday") \
+            .select("*") \
+            .eq("symbol", symbol) \
+            .order("created_at", desc=False) \
+            .limit(limit) \
+            .execute()
+        if res.data:
+            return res.data
+    except Exception as e:
         try:
             res = supabase.table("gex_intraday") \
                 .select("*") \
                 .eq("symbol", symbol) \
-                .order("created_at", desc=False) \
                 .limit(limit) \
                 .execute()
             if res.data:
                 return res.data
-        except Exception:
-            res = supabase.table("gex_intraday") \
-                .select("*") \
-                .eq("symbol", symbol) \
-                .limit(limit) \
-                .execute()
-            if res.data:
-                return res.data
-        return []
-
-    return _cloud_call_with_fallback(f"history:{symbol}:{limit}", [], _do_fetch)
+        except Exception as e2:
+            log_to_console("Supabase History Fetch Error", str(e2))
+    return []
 
 # --- INICIALIZACIÓN DE ESTADOS Y SISTEMA DE LOGS ---
 if "console_logs" not in st.session_state:
@@ -368,30 +362,6 @@ st.markdown("""
         border-radius: 8px;
         overflow: hidden;
         margin-bottom: 20px;
-    }
-
-    /* --- ANTI "PANTALLA OPACA / SUSPENDIDA" EN CADA REFRESH ---
-       Streamlit marca los elementos ya pintados como "stale" en cuanto
-       arranca un rerun (p. ej. el que dispara st_autorefresh) y les baja
-       la opacidad + aplica un pequeño blur mientras recalcula. Es justo
-       ese efecto de "colgado" que se ve en cada auto-refresco. Forzamos
-       opacidad y filtro normales para que el contenido no se atenúe
-       visualmente durante el recálculo. Esto NO evita el recálculo en sí
-       (eso requeriría aislar el refresh en un st.fragment), pero elimina
-       el parpadeo/atenuado visible. */
-    [data-stale="true"],
-    .stApp[data-teststate="running"] .element-container,
-    .element-container:has(.stale-element),
-    .stale-element {
-        opacity: 1 !important;
-        filter: none !important;
-        transition: none !important;
-    }
-
-    /* Oculta el indicador de "running" (icono superior derecho) para que
-       tampoco delate visualmente que hay un refresh en curso. */
-    [data-testid="stStatusWidget"] {
-        visibility: hidden !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -651,136 +621,18 @@ def _schwab_call_with_fallback(cache_key, empty_value, fetch_fn):
         log_to_console(f"Schwab call error ({cache_key})", str(e))
     return _schwab_last_good.get(cache_key, empty_value)
 
-# --- FALLBACK "ÚLTIMO DATO BUENO" PARA LECTURAS SUPABASE/FIREBASE (OTRO ---
-# --- ÁNGULO DEL BUG MULTIUSUARIO: "a una se le recargan los datos de GEX ---
-# --- INFO y a las demás se les borra todo") ---
-# El fix anterior (_schwab_call_with_fallback, arriba) solo cubría las
-# llamadas a Schwab. Pero fetch_supabase_latest_snapshot (TTL=1s),
-# fetch_supabase_gex_history (TTL=2s) y fetch_firebase_history (TTL=20s)
-# tienen EXACTAMENTE el mismo problema de fondo: son @st.cache_data, es
-# decir, una única entrada de caché en memoria de proceso compartida por
-# TODAS las sesiones conectadas (no por usuario). Streamlit solo vuelve a
-# ejecutar la función una vez que el TTL expira, sin importar cuántos
-# usuarios la estén llamando en paralelo — así que en condiciones normales
-# el fetch real ocurre como mucho una vez por segundo/2s/20s para TODA la
-# app, lo cual está bien. El problema es qué pasa cuando ESA única llamada
-# falla o Supabase/Firebase responden vacío por un hipo de red, un rate
-# limit, o (como reporta el usuario) justo cuando otra sesión disparó una
-# recarga de datos al mismo tiempo: ese resultado vacío/None quedaba
-# guardado tal cual en la única entrada de caché compartida, y se servía
-# a TODAS las sesiones (incluidas las que no tocaron nada) hasta que el
-# TTL volviera a expirar. Eso es lo que se ve como "a las demás se les
-# borran todos los datos" aunque su sesión no haya hecho nada.
-#
-# Mismo remedio que con Schwab: en vez de dejar que un fallo/vacío puntual
-# se propague al caché compartido de Streamlit, se guarda el último
-# resultado bueno en un dict de proceso (protegido con @st.cache_resource
-# para que NO se reinicialice vacío en cada rerun de cualquier sesión,
-# igual que _schwab_last_good) y, si el fetch de turno falla o viene
-# vacío, se sirve ese último bueno en su lugar.
-@st.cache_resource
-def _get_cloud_shared_state():
-    return threading.Lock(), {}
-
-_cloud_lock, _cloud_last_good = _get_cloud_shared_state()
-
-def _cloud_call_with_fallback(cache_key, empty_value, fetch_fn):
-    """Igual que _schwab_call_with_fallback pero para lecturas a Supabase/
-    Firebase. Si fetch_fn() lanza excepción o devuelve un valor vacío
-    (None, dict/list vacío), se sirve el último valor no-vacío conocido
-    para cache_key en vez de propagar el vacío al caché compartido."""
-    try:
-        with _cloud_lock:
-            result = fetch_fn()
-        is_empty = (
-            result is None
-            or (isinstance(result, (dict, list)) and len(result) == 0)
-        )
-        if not is_empty:
-            _cloud_last_good[cache_key] = result
-            return result
-    except Exception as e:
-        log_to_console(f"Cloud call error ({cache_key})", str(e))
-    return _cloud_last_good.get(cache_key, empty_value)
-
-# --- FIX "DESCARGAS" DE FIREBASE (~800MB/día) ---
-# El esquema anterior tenía dos problemas de fondo:
-#
-# 1) fetch_firebase_history() bajaba el nodo /history COMPLETO (TODOS los
-#    días guardados, hasta 180) con un cache TTL de apenas 20s, y se
-#    llamaba en el nivel superior del script -> con auto-refresco cada 15s
-#    (default), CADA rerun volvía a descargar el histórico entero apenas
-#    vencía el cache. Con retención larga (meses/año) eso es gigante y se
-#    repite cientos de veces por día. Esta función se reemplaza por dos
-#    fetches baratos y puntuales (abajo): uno "shallow" (solo nombres de
-#    fecha, sin contenido) y otro que baja UN solo día, bajo demanda.
-#
-# 2) push_history_entry_to_firebase() guardaba cada día como un array único
-#    (/history/{fecha} = [snap1, snap2, ...]), así que agregar 1 snapshot
-#    nuevo requería LEER el array completo acumulado ese día (creciente,
-#    hasta ~1MB al cierre) antes de poder reescribirlo. Multiplicado por un
-#    snapshot cada 60s durante toda la sesión, es lectura acumulativa
-#    creciente sobre sí misma. Se reemplaza por un esquema donde cada
-#    snapshot es su propio nodo hijo, indexado por su hora
-#    (/history/{fecha}/{HH:MM} = {...}): agregar uno nuevo es un PUT chico,
-#    sin necesidad de leer nada antes. Los días viejos guardados con el
-#    esquema anterior (array) siguen leyéndose sin problema — ver
-#    fetch_firebase_day más abajo, que soporta ambos formatos.
-@st.cache_data(ttl=60)
-def fetch_firebase_available_dates(db_url):
-    """Solo los NOMBRES de fecha disponibles en /history (query shallow=true:
-    Firebase devuelve nada más que las keys, no el contenido de cada día).
-    Esto es lo que se usa para armar el selector de fechas del backtest y
-    para saber "cuál es el día más reciente guardado" en los fallbacks, sin
-    tener que bajar ni un solo snapshot de contenido."""
+@st.cache_data(ttl=20)
+def fetch_firebase_history(db_url):
     if not db_url:
-        return []
-
-    def _do_fetch():
-        url = f"{db_url}/history.json?shallow=true"
+        return {}
+    try:
+        url = f"{db_url}/history.json"
         resp = requests.get(url, timeout=5)
         if resp.status_code == 200:
-            data = resp.json() or {}
-            if isinstance(data, dict):
-                return sorted(data.keys())
-        return []
-
-    return _cloud_call_with_fallback(f"firebase_dates:{db_url}", [], _do_fetch)
-
-@st.cache_data(ttl=300)
-def fetch_firebase_day(db_url, date_key):
-    """Baja los snapshots de UN día puntual (no el histórico completo).
-    Se llama solo cuando de verdad hace falta ese día específico: hoy (para
-    el fallback en vivo / NET DRIFT) o la fecha que el usuario eligió en
-    Backgamma — nunca para "todos los días" de una.
-
-    Soporta los dos esquemas de guardado:
-    - Nuevo (por hora): /history/{fecha}/{HH:MM} = {...}  -> llega como dict
-    - Viejo (array):    /history/{fecha} = [{...}, {...}]  -> llega como list
-    En ambos casos se devuelve una lista ordenada por el campo "time" de
-    cada snapshot (no por la key), para que un día "de transición" con
-    entradas mezcladas de los dos esquemas quede igual en orden cronológico.
-    """
-    if not db_url or not date_key:
-        return []
-
-    def _do_fetch():
-        url = f"{db_url}/history/{date_key}.json"
-        resp = requests.get(url, timeout=8)
-        if resp.status_code != 200:
-            return []
-        raw = resp.json()
-        if isinstance(raw, dict):
-            entries = list(raw.values())
-        elif isinstance(raw, list):
-            entries = raw
-        else:
-            return []
-        entries = [e for e in entries if isinstance(e, dict) and e.get("time")]
-        entries.sort(key=lambda e: e["time"])
-        return entries
-
-    return _cloud_call_with_fallback(f"firebase_day:{db_url}:{date_key}", [], _do_fetch)
+            return resp.json() or {}
+    except Exception as e:
+        log_to_console("Firebase Read Error", str(e))
+    return {}
 
 # --- CLIENTES DE IA ---
 @st.cache_resource
@@ -1107,13 +959,7 @@ if client is not None and isinstance(chain_raw, dict) and len(chain_raw) > 0 and
 # eso lo sigue controlando 'is_online' de arriba.
 schwab_status_online = client is not None and isinstance(chain_raw, dict) and len(chain_raw) > 0
 
-# Antes: jsonbin_history_data = fetch_firebase_history(...) bajaba TODO el
-# histórico acá mismo, en cada rerun. Ahora solo pedimos la lista de fechas
-# disponibles (barata, shallow) y recién bajamos el contenido de un día
-# puntual cuando realmente hace falta (ver fetch_firebase_day más abajo:
-# fallback de "último día" acá, "hoy" para el drift, o la fecha elegida en
-# Backgamma).
-available_cloud_dates_all = fetch_firebase_available_dates(FIREBASE_DB_URL)
+jsonbin_history_data = fetch_firebase_history(FIREBASE_DB_URL)
 
 if not is_online:
     if latest_supabase_snap:
@@ -1132,27 +978,29 @@ if not is_online:
             if 'exp_date' not in df_curr.columns: df_curr['exp_date'] = exp_0dte.split(':')[0]
             if 'dte' not in df_curr.columns: df_curr['dte'] = 0
             if 'exp_key' not in df_curr.columns: df_curr['exp_key'] = exp_0dte
-    elif available_cloud_dates_all:
-        latest_date_key = available_cloud_dates_all[-1]
-        latest_day_snaps = fetch_firebase_day(FIREBASE_DB_URL, latest_date_key)
-        if latest_day_snaps:
-            is_cloud_backup = True
-            last_cloud_snap = latest_day_snaps[-1]
-            spot_price = float(last_cloud_snap.get("spot", 0.0))
-
-            cloud_strikes = last_cloud_snap.get("strikes", [])
-            if cloud_strikes:
-                df_curr = pd.DataFrame(cloud_strikes)
-                for col in ['openInterest_c', 'openInterest_p']:
-                    if col not in df_curr.columns: df_curr[col] = 1000
-                for col in ['iv_c', 'iv_p']:
-                    if col not in df_curr.columns: df_curr[col] = 0.20
-                for col in ['delta_c', 'delta_p', 'theta_c', 'theta_p', 'vega_c', 'vega_p', 'vanna_c', 'vanna_p']:
-                    if col not in df_curr.columns: df_curr[col] = 0.0
-                exp_0dte = latest_date_key + ":0"
-                if 'exp_date' not in df_curr.columns: df_curr['exp_date'] = latest_date_key
-                if 'dte' not in df_curr.columns: df_curr['dte'] = 0
-                if 'exp_key' not in df_curr.columns: df_curr['exp_key'] = exp_0dte
+    elif jsonbin_history_data:
+        available_cloud_dates = sorted(list(jsonbin_history_data.keys()))
+        if available_cloud_dates:
+            latest_date_key = available_cloud_dates[-1]
+            latest_day_snaps = jsonbin_history_data.get(latest_date_key, [])
+            if latest_day_snaps:
+                is_cloud_backup = True
+                last_cloud_snap = latest_day_snaps[-1]
+                spot_price = float(last_cloud_snap.get("spot", 0.0))
+                
+                cloud_strikes = last_cloud_snap.get("strikes", [])
+                if cloud_strikes:
+                    df_curr = pd.DataFrame(cloud_strikes)
+                    for col in ['openInterest_c', 'openInterest_p']:
+                        if col not in df_curr.columns: df_curr[col] = 1000
+                    for col in ['iv_c', 'iv_p']:
+                        if col not in df_curr.columns: df_curr[col] = 0.20
+                    for col in ['delta_c', 'delta_p', 'theta_c', 'theta_p', 'vega_c', 'vega_p', 'vanna_c', 'vanna_p']:
+                        if col not in df_curr.columns: df_curr[col] = 0.0
+                    exp_0dte = latest_date_key + ":0"
+                    if 'exp_date' not in df_curr.columns: df_curr['exp_date'] = latest_date_key
+                    if 'dte' not in df_curr.columns: df_curr['dte'] = 0
+                    if 'exp_key' not in df_curr.columns: df_curr['exp_key'] = exp_0dte
 
 if spot_price <= 0:
     spot_price = TICKER_DEFAULTS.get(ticker_symbol, 480.00)
@@ -1215,10 +1063,11 @@ elif is_cloud_backup and latest_supabase_snap:
     else:
         full_spots = [spot_price]
         h_1m_reindexed = pd.DataFrame()
-elif is_cloud_backup and available_cloud_dates_all:
-    latest_date_key = available_cloud_dates_all[-1]
-    latest_day_snaps = fetch_firebase_day(FIREBASE_DB_URL, latest_date_key)
-
+elif is_cloud_backup and jsonbin_history_data:
+    available_cloud_dates = sorted(list(jsonbin_history_data.keys()))
+    latest_date_key = available_cloud_dates[-1]
+    latest_day_snaps = jsonbin_history_data.get(latest_date_key, [])
+    
     if latest_day_snaps:
         full_timestamps = [s.get("time") for s in latest_day_snaps]
         full_timestamps_ny = full_timestamps  # ya vienen guardados en NY fija
@@ -1755,11 +1604,9 @@ if 'Z_matrix_real' not in locals() or Z_matrix_real.shape[0] == 0:
 # de fecha/hora en Firebase/Supabase ahora siempre se guardan en NY,
 # independientemente de la zona horaria que cada usuario tenga elegida.
 today_key_drift = now_tz_store.strftime('%Y-%m-%d')
-# Antes esto leía jsonbin_history_data (el árbol COMPLETO ya bajado arriba).
-# Ahora se pide puntualmente el día de hoy — un solo día, no todo el
-# histórico — con cache de 5 min, que alcanza de sobra para un gráfico de
-# drift que se redibuja cada refresh.
-today_snaps_for_drift = fetch_firebase_day(FIREBASE_DB_URL, today_key_drift)
+today_snaps_for_drift = []
+if jsonbin_history_data and today_key_drift in jsonbin_history_data:
+    today_snaps_for_drift = jsonbin_history_data.get(today_key_drift, [])
 
 # Si Firebase todavía no tiene (o tiene muy pocos) snapshots de HOY -por
 # ejemplo, recién se abrió la web, o hubo un hipo momentáneo al leerlo-,
@@ -1819,13 +1666,7 @@ else:
         call_drift_raw, put_drift_raw, net_drift_raw = np.zeros(len(full_timestamps)), np.zeros(len(full_timestamps)), np.zeros(len(full_timestamps))
         last_call_drift, last_put_drift, last_net_drift = 0.0, 0.0, 0.0
 
-# Datos ficticios de demo SOLO si no hay absolutamente nada real disponible
-# (ni fechas en Firebase, ni snapshot de Supabase). backtest_mock_data
-# alimenta únicamente la pestaña Backgamma más abajo cuando no hay historial
-# real todavía; ya no se mezcla con available_cloud_dates_all (que sigue
-# reflejando fielmente lo que hay guardado de verdad).
-backtest_mock_data = None
-if not available_cloud_dates_all and not latest_supabase_snap:
+if not jsonbin_history_data and not latest_supabase_snap:
     mock_date = now_tz.strftime('%Y-%m-%d')
     mock_snaps = []
     mock_times = [t.strftime('%H:%M') for t in pd.date_range("09:30", "16:00", freq="5min")]
@@ -1850,7 +1691,7 @@ if not available_cloud_dates_all and not latest_supabase_snap:
             "net_gex": float(sum(s["net_gex"] for s in stks)),
             "strikes": stks
         })
-    backtest_mock_data = {mock_date: mock_snaps}
+    jsonbin_history_data = {mock_date: mock_snaps}
 
 # --- MOTOR DE ANÁLISIS DEDICADO E IA CON ESCENARIOS Y VIX ---
 def generar_analisis_local(ticker, spot, net_gex, regime, condition,
@@ -2556,16 +2397,7 @@ if not df_header_filtered.empty and 'net_gex' in df_header_filtered.columns:
     # subestimar un strike cuyo volumen está repartido entre varias
     # expiraciones. Dominancia por SIGNO del net_gex (ver compute_call_put_walls).
     df_hdr_gex_by_strike = df_hdr_sorted.groupby('strike', as_index=False)[['call_gex', 'put_gex', 'net_gex']].sum() if {'call_gex', 'put_gex', 'net_gex'}.issubset(df_hdr_sorted.columns) else pd.DataFrame()
-    # FIX: antes solo se reasignaban cw1/pw1 aquí (cw2, cw3, pw2, pw3 se
-    # descartaban en variables basura _cw2_hdr/_cw3_hdr/_pw2_hdr/_pw3_hdr),
-    # dejando esos 4 niveles "congelados" con el cálculo de TODAS las
-    # expiraciones (línea ~1477) mientras cw1/pw1 sí reflejaban el filtro de
-    # DTE elegido en el selector 📂 DTE. Como LIVE GAMMA dibuja sus 6 líneas
-    # (Call/Put Wall 1-2-3) con estas mismas variables globales, CW1/PW1
-    # quedaban consistentes con el filtro pero CW2/CW3/PW2/PW3 no — de ahí
-    # la divergencia entre GEX INFO y LIVE GAMMA. Ahora las 6 se reasignan
-    # juntas, así todas respetan el mismo filtro de DTE.
-    cw1, cw2, cw3, pw1, pw2, pw3 = compute_call_put_walls(df_hdr_gex_by_strike, spot_price)
+    cw1, _cw2_hdr, _cw3_hdr, pw1, _pw2_hdr, _pw3_hdr = compute_call_put_walls(df_hdr_gex_by_strike, spot_price)
 
     df_hdr_sorted['cum_gex'] = df_hdr_sorted['net_gex'].cumsum()
     zero_gamma = spot_price
@@ -2615,47 +2447,60 @@ def push_to_supabase_bg(snapshot_payload):
         except Exception as e:
             log_to_console("Supabase Async Snapshot Error", str(e))
 
-# Retención: días completos que se guardan antes de podar los más viejos.
-# Con snapshots cada ~60s en horario de mercado, un día ronda ~1MB, así que
-# 400 días son ~400MB — deja margen para más de un año de backtest sin
-# acercarse al 1GB gratis de Firebase. Como cada snapshot ahora es su propio
-# nodo chico (ver más abajo), subir este número no tiene el costo de
-# descarga que tenía antes; podés subirlo más si te hace falta más rango.
-HISTORY_RETENTION_DAYS = 400
-
-def push_history_entry_to_firebase(db_url, date_key, snapshot_entry):
-    """Guarda 1 snapshot como nodo hijo propio, indexado por su hora
-    (/history/{fecha}/{HH:MM} = {...}), en vez de como elemento de un array
-    por día. Esto elimina el patrón anterior de "leer todo el día acumulado
-    antes de poder agregar un snapshot más": acá un PUT a la hora exacta ES
-    la operación completa, sin lectura previa. Si esa hora ya existe (mismo
-    snapshot re-enviado), el PUT simplemente la vuelve a dejar igual — no
-    hace falta ETag ni reintentos por conflicto, cada hora es su propio
-    nodo independiente."""
+def push_history_entry_to_firebase(db_url, date_key, snapshot_entry, max_retries=3):
     try:
-        time_key = snapshot_entry.get("time")
-        if not time_key:
-            return
-        entry_url = f"{db_url}/history/{date_key}/{time_key}.json"
-        resp = requests.put(entry_url, json=snapshot_entry, headers={"Content-Type": "application/json"}, timeout=4)
-        if resp.status_code != 200:
-            log_to_console("Firebase History Push", f"HTTP {resp.status_code}: {resp.text[:200]}")
-    except Exception as e:
-        log_to_console("Firebase Async Background Push", str(e))
-        return
+        day_url = f"{db_url}/history/{date_key}.json"
 
-    # Poda de días viejos: esto sigue siendo un fetch "shallow" (solo
-    # nombres de fecha, no contenido) — barato sin importar cuántos días
-    # de retención se dejen configurados arriba.
-    try:
+        # Lectura-modificación-escritura protegida con ETag condicional de
+        # Firebase (ver https://firebase.google.com/docs/reference/rest/database
+        # -> "ETags y escrituras condicionales"). Sin esto, con varios usuarios
+        # guardando snapshots casi al mismo tiempo, dos lecturas pueden partir
+        # del mismo array y el segundo PUT pisa silenciosamente al primero
+        # (se pierde un snapshot). Con ETag: si el PUT no matchea (412 =
+        # alguien más escribió en el medio), se vuelve a leer el estado
+        # fresco y se reintenta, en vez de sobreescribir a ciegas.
+        for attempt in range(max_retries):
+            resp = requests.get(day_url, headers={"X-Firebase-ETag": "true"}, timeout=3)
+            etag = resp.headers.get("ETag")
+            day_list = resp.json() if resp.status_code == 200 else None
+            if not isinstance(day_list, list):
+                day_list = []
+
+            existing_times = [s.get("time") for s in day_list if isinstance(s, dict)]
+            if snapshot_entry["time"] in existing_times:
+                return
+
+            day_list.append(snapshot_entry)
+            put_headers = {"Content-Type": "application/json"}
+            if etag:
+                put_headers["if-Match"] = etag
+            put_resp = requests.put(day_url, json=day_list, headers=put_headers, timeout=4)
+
+            if put_resp.status_code == 200:
+                break
+            if put_resp.status_code == 412:
+                # Otro usuario escribió entre nuestro GET y nuestro PUT:
+                # reintentar desde el principio con datos frescos.
+                continue
+            # Cualquier otro error (red, 4xx/5xx no relacionado a ETag): no
+            # tiene sentido seguir reintentando en bucle, se deja constancia
+            # en la consola y se sigue con la poda de todas formas.
+            log_to_console("Firebase History Push", f"HTTP {put_resp.status_code}: {put_resp.text[:200]}")
+            break
+        else:
+            log_to_console("Firebase History Push", f"Se agotaron los {max_retries} reintentos por conflicto de ETag (412).")
+
+        # Poda: con snapshots cada ~60s en horario de mercado, un día ronda
+        # ~1MB en Firebase. Con el 1GB gratis de espacio, dejamos hasta 180
+        # días (~180MB) de colchón para el backtest sin acercarnos al límite.
         shallow_resp = requests.get(f"{db_url}/history.json?shallow=true", timeout=3)
         if shallow_resp.status_code == 200:
             all_dates = shallow_resp.json() or {}
-            if isinstance(all_dates, dict) and len(all_dates) > HISTORY_RETENTION_DAYS:
-                for old_d in sorted(all_dates.keys())[:-HISTORY_RETENTION_DAYS]:
+            if isinstance(all_dates, dict) and len(all_dates) > 180:
+                for old_d in sorted(all_dates.keys())[:-180]:
                     requests.delete(f"{db_url}/history/{old_d}.json", timeout=3)
     except Exception as e:
-        log_to_console("Firebase History Prune", str(e))
+        log_to_console("Firebase Async Background Push", str(e))
 
 def export_snapshot_throttled():
     if not is_online:
@@ -3163,22 +3008,15 @@ with tab_back:
     st.markdown('<div class="depth-frame">', unsafe_allow_html=True)
     st.markdown("<h3 style='margin-top:0; font-weight:800; color:#F0F6FC; font-size:1.1rem; letter-spacing:0.5px;'>📜 BACKGAMMA - BACKTEST DE GAMMA</h3>", unsafe_allow_html=True)
 
-    if available_cloud_dates_all or backtest_mock_data:
-        dates_avail = sorted(available_cloud_dates_all, reverse=True) or sorted(list((backtest_mock_data or {}).keys()), reverse=True)
+    if jsonbin_history_data:
+        dates_avail = sorted(list(jsonbin_history_data.keys()), reverse=True)
         sel_date = st.selectbox("Seleccionar Fecha de Historial:", dates_avail, key="backtest_sel_date")
 
-        # Bajamos el contenido SOLO del día elegido, y solo en este momento
-        # (no en el arranque del script) — esto es lo que evita descargar
-        # los ~400 días de retención completos nada más para armar el
-        # dropdown de arriba.
-        if available_cloud_dates_all:
-            day_snaps = fetch_firebase_day(FIREBASE_DB_URL, sel_date)
-        else:
-            day_snaps_raw = (backtest_mock_data or {}).get(sel_date, [])
-            day_snaps = sorted(
-                [s for s in day_snaps_raw if isinstance(s, dict) and s.get("time")],
-                key=lambda s: s["time"]
-            )
+        day_snaps_raw = jsonbin_history_data.get(sel_date, [])
+        day_snaps = sorted(
+            [s for s in day_snaps_raw if isinstance(s, dict) and s.get("time")],
+            key=lambda s: s["time"]
+        )
 
         if day_snaps:
             times_hist = [s.get("time") for s in day_snaps]
