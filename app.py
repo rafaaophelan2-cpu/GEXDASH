@@ -73,17 +73,18 @@ supabase: Client = get_supabase_client()
 def fetch_supabase_latest_snapshot(symbol="QQQ"):
     if not supabase:
         return None
-    try:
-        res = supabase.table("gex_intraday") \
-            .select("*") \
-            .eq("symbol", symbol) \
-            .order("created_at", desc=True) \
-            .limit(1) \
-            .execute()
-        if res.data and len(res.data) > 0:
-            return res.data[0]
-    except Exception as e:
+
+    def _do_fetch():
         try:
+            res = supabase.table("gex_intraday") \
+                .select("*") \
+                .eq("symbol", symbol) \
+                .order("created_at", desc=True) \
+                .limit(1) \
+                .execute()
+            if res.data and len(res.data) > 0:
+                return res.data[0]
+        except Exception:
             res = supabase.table("gex_intraday") \
                 .select("*") \
                 .eq("symbol", symbol) \
@@ -91,25 +92,30 @@ def fetch_supabase_latest_snapshot(symbol="QQQ"):
                 .execute()
             if res.data and len(res.data) > 0:
                 return res.data[0]
-        except Exception as e2:
-            log_to_console("Supabase Snapshot Fetch Error", str(e2))
-    return None
+        return None
+
+    # Ver comentario junto a _cloud_call_with_fallback (más abajo) para el
+    # porqué de este wrapper: sin él, un hipo de red puntual en ESTA lectura
+    # de 1s de TTL dejaba `None` guardado en el caché compartido por TODOS
+    # los usuarios conectados durante ese segundo.
+    return _cloud_call_with_fallback(f"latest_snapshot:{symbol}", None, _do_fetch)
 
 @st.cache_data(ttl=2)
 def fetch_supabase_gex_history(symbol="QQQ", limit=100):
     if not supabase:
         return []
-    try:
-        res = supabase.table("gex_intraday") \
-            .select("*") \
-            .eq("symbol", symbol) \
-            .order("created_at", desc=False) \
-            .limit(limit) \
-            .execute()
-        if res.data:
-            return res.data
-    except Exception as e:
+
+    def _do_fetch():
         try:
+            res = supabase.table("gex_intraday") \
+                .select("*") \
+                .eq("symbol", symbol) \
+                .order("created_at", desc=False) \
+                .limit(limit) \
+                .execute()
+            if res.data:
+                return res.data
+        except Exception:
             res = supabase.table("gex_intraday") \
                 .select("*") \
                 .eq("symbol", symbol) \
@@ -117,9 +123,9 @@ def fetch_supabase_gex_history(symbol="QQQ", limit=100):
                 .execute()
             if res.data:
                 return res.data
-        except Exception as e2:
-            log_to_console("Supabase History Fetch Error", str(e2))
-    return []
+        return []
+
+    return _cloud_call_with_fallback(f"history:{symbol}:{limit}", [], _do_fetch)
 
 # --- INICIALIZACIÓN DE ESTADOS Y SISTEMA DE LOGS ---
 if "console_logs" not in st.session_state:
@@ -621,18 +627,71 @@ def _schwab_call_with_fallback(cache_key, empty_value, fetch_fn):
         log_to_console(f"Schwab call error ({cache_key})", str(e))
     return _schwab_last_good.get(cache_key, empty_value)
 
+# --- FALLBACK "ÚLTIMO DATO BUENO" PARA LECTURAS SUPABASE/FIREBASE (OTRO ---
+# --- ÁNGULO DEL BUG MULTIUSUARIO: "a una se le recargan los datos de GEX ---
+# --- INFO y a las demás se les borra todo") ---
+# El fix anterior (_schwab_call_with_fallback, arriba) solo cubría las
+# llamadas a Schwab. Pero fetch_supabase_latest_snapshot (TTL=1s),
+# fetch_supabase_gex_history (TTL=2s) y fetch_firebase_history (TTL=20s)
+# tienen EXACTAMENTE el mismo problema de fondo: son @st.cache_data, es
+# decir, una única entrada de caché en memoria de proceso compartida por
+# TODAS las sesiones conectadas (no por usuario). Streamlit solo vuelve a
+# ejecutar la función una vez que el TTL expira, sin importar cuántos
+# usuarios la estén llamando en paralelo — así que en condiciones normales
+# el fetch real ocurre como mucho una vez por segundo/2s/20s para TODA la
+# app, lo cual está bien. El problema es qué pasa cuando ESA única llamada
+# falla o Supabase/Firebase responden vacío por un hipo de red, un rate
+# limit, o (como reporta el usuario) justo cuando otra sesión disparó una
+# recarga de datos al mismo tiempo: ese resultado vacío/None quedaba
+# guardado tal cual en la única entrada de caché compartida, y se servía
+# a TODAS las sesiones (incluidas las que no tocaron nada) hasta que el
+# TTL volviera a expirar. Eso es lo que se ve como "a las demás se les
+# borran todos los datos" aunque su sesión no haya hecho nada.
+#
+# Mismo remedio que con Schwab: en vez de dejar que un fallo/vacío puntual
+# se propague al caché compartido de Streamlit, se guarda el último
+# resultado bueno en un dict de proceso (protegido con @st.cache_resource
+# para que NO se reinicialice vacío en cada rerun de cualquier sesión,
+# igual que _schwab_last_good) y, si el fetch de turno falla o viene
+# vacío, se sirve ese último bueno en su lugar.
+@st.cache_resource
+def _get_cloud_shared_state():
+    return threading.Lock(), {}
+
+_cloud_lock, _cloud_last_good = _get_cloud_shared_state()
+
+def _cloud_call_with_fallback(cache_key, empty_value, fetch_fn):
+    """Igual que _schwab_call_with_fallback pero para lecturas a Supabase/
+    Firebase. Si fetch_fn() lanza excepción o devuelve un valor vacío
+    (None, dict/list vacío), se sirve el último valor no-vacío conocido
+    para cache_key en vez de propagar el vacío al caché compartido."""
+    try:
+        with _cloud_lock:
+            result = fetch_fn()
+        is_empty = (
+            result is None
+            or (isinstance(result, (dict, list)) and len(result) == 0)
+        )
+        if not is_empty:
+            _cloud_last_good[cache_key] = result
+            return result
+    except Exception as e:
+        log_to_console(f"Cloud call error ({cache_key})", str(e))
+    return _cloud_last_good.get(cache_key, empty_value)
+
 @st.cache_data(ttl=20)
 def fetch_firebase_history(db_url):
     if not db_url:
         return {}
-    try:
+
+    def _do_fetch():
         url = f"{db_url}/history.json"
         resp = requests.get(url, timeout=5)
         if resp.status_code == 200:
             return resp.json() or {}
-    except Exception as e:
-        log_to_console("Firebase Read Error", str(e))
-    return {}
+        return {}
+
+    return _cloud_call_with_fallback(f"firebase_history:{db_url}", {}, _do_fetch)
 
 # --- CLIENTES DE IA ---
 @st.cache_resource
