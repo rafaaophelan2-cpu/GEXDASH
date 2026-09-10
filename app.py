@@ -884,44 +884,15 @@ def fetch_nq_price_schwab():
     if not client:
         return 0.0
 
-    def _front_month_futures_symbol(root="/NQ"):
-        # FIX: la causa real de la divergencia QQQ->MNQ reportada (indicador
-        # mostrando 29404.5 cuando el valor correcto era ~29400) es que
-        # "/NQ" (símbolo continuo genérico) suele NO devolver cotización real
-        # vía la API REST de Schwab -a diferencia de thinkorswim-, así que
-        # esta función caía siempre en 0.0 y el ratio quedaba pegado al
-        # fallback fijo (715 * 41.125 = 29404.375 ≈ 29404.5, justo lo que se
-        # veía). Como respaldo, se intenta también el contrato específico
-        # vigente (mes trimestral CME: H=Mar, M=Jun, U=Sep, Z=Dic + año).
-        month_codes = {1: 'H', 2: 'H', 3: 'H', 4: 'M', 5: 'M', 6: 'M',
-                       7: 'U', 8: 'U', 9: 'U', 10: 'Z', 11: 'Z', 12: 'Z'}
-        today = datetime.now()
-        return f"{root}{month_codes[today.month]}{today.strftime('%y')}"
-
     def _do_fetch():
-        candidates = ["/NQ", _front_month_futures_symbol("/NQ")]
-        last_detail = None
-        for sym in candidates:
-            try:
-                resp = client.get_quote(sym)
-            except Exception as e:
-                last_detail = f"{sym}: excepción {e}"
-                continue
-            if resp.status_code != 200:
-                last_detail = f"{sym}: HTTP {resp.status_code} - {resp.text[:150]}"
-                continue
+        resp = client.get_quote("/NQ")
+        if resp.status_code == 200:
             data = resp.json()
-            sym_data = data.get(sym, {}) if isinstance(data, dict) else {}
-            quote_data = sym_data.get("quote", {}) if isinstance(sym_data, dict) else {}
+            nq_data = data.get("/NQ", {}) if isinstance(data, dict) else {}
+            quote_data = nq_data.get("quote", {}) if isinstance(nq_data, dict) else {}
             price = float(quote_data.get("lastPrice", quote_data.get("closePrice", 0.0)))
             if price > 0:
                 return price
-            last_detail = f"{sym}: HTTP 200 pero sin lastPrice/closePrice válido ({quote_data})"
-        # Antes esto se perdía en silencio (no es una excepción, así que
-        # _schwab_call_with_fallback tampoco lo registraba) y el ratio caía
-        # siempre al 41.125 fijo sin ninguna pista de por qué.
-        if last_detail:
-            log_to_console("NQ Price Fetch (símbolos probados sin éxito)", last_detail)
         return 0.0
 
     return _schwab_call_with_fallback("nq_price", 0.0, _do_fetch)
