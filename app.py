@@ -369,6 +369,30 @@ st.markdown("""
         overflow: hidden;
         margin-bottom: 20px;
     }
+
+    /* --- ANTI "PANTALLA OPACA / SUSPENDIDA" EN CADA REFRESH ---
+       Streamlit marca los elementos ya pintados como "stale" en cuanto
+       arranca un rerun (p. ej. el que dispara st_autorefresh) y les baja
+       la opacidad + aplica un pequeño blur mientras recalcula. Es justo
+       ese efecto de "colgado" que se ve en cada auto-refresco. Forzamos
+       opacidad y filtro normales para que el contenido no se atenúe
+       visualmente durante el recálculo. Esto NO evita el recálculo en sí
+       (eso requeriría aislar el refresh en un st.fragment), pero elimina
+       el parpadeo/atenuado visible. */
+    [data-stale="true"],
+    .stApp[data-teststate="running"] .element-container,
+    .element-container:has(.stale-element),
+    .stale-element {
+        opacity: 1 !important;
+        filter: none !important;
+        transition: none !important;
+    }
+
+    /* Oculta el indicador de "running" (icono superior derecho) para que
+       tampoco delate visualmente que hay un refresh en curso. */
+    [data-testid="stStatusWidget"] {
+        visibility: hidden !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
