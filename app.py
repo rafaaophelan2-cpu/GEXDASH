@@ -1157,6 +1157,35 @@ if not is_online:
 if spot_price <= 0:
     spot_price = TICKER_DEFAULTS.get(ticker_symbol, 480.00)
 
+# --- DIAGNÓSTICO "GEX INFO VACÍO" ---
+# No pudimos reproducir en vivo el bug reportado ("a algunos se les borra
+# GEX INFO cuando los 3 usamos la web a la vez") con los fixes ya aplicados
+# arriba (fallback de último-dato-bueno para Schwab/Supabase/Firebase +
+# cache_resource para que no se reinicialice en cada rerun). En vez de
+# seguir adivinando a ciegas, dejamos una foto exacta del estado en
+# console_logs CADA VEZ que df_curr termina vacío para una sesión — con eso,
+# la próxima vez que pase, se puede ver en Supabase (tabla console_logs)
+# exactamente qué rama falló (Schwab caído sin cache, Supabase sin
+# snapshot, Firebase sin días disponibles, etc.) en vez de tener que
+# reproducirlo a mano.
+if df_curr.empty:
+    log_to_console(
+        "GEX INFO vacío (diagnóstico)",
+        json.dumps({
+            "usuario": st.session_state.get("user_email", ""),
+            "ticker": ticker_symbol,
+            "strike_range": strike_range,
+            "client_configurado": client is not None,
+            "chain_raw_tipo": type(chain_raw).__name__,
+            "chain_raw_vacio": (not chain_raw) if isinstance(chain_raw, dict) else True,
+            "is_online": is_online,
+            "is_cloud_backup": is_cloud_backup,
+            "latest_supabase_snap_presente": bool(latest_supabase_snap),
+            "available_cloud_dates": len(available_cloud_dates_all) if available_cloud_dates_all else 0,
+            "spot_price": spot_price,
+        }, default=str)
+    )
+
 h_1m = fetch_history_schwab(ticker_symbol)
 
 today_date_str = now_tz.strftime('%Y-%m-%d')
